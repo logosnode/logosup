@@ -1,6 +1,6 @@
 # Setting Up Your Logos Node — Workshop Guide
 
-## Logos Circle Lisbon · [Date placeholder]
+## Logos Circle Lisbon · June 10, 2026
 
 Welcome! By the end of this guide you will have a Logos Blockchain node running on a Raspberry Pi, contributing to a decentralised, censorship-resistant network. No prior Linux experience is required — just follow each step in order.
 
@@ -38,16 +38,51 @@ Welcome! By the end of this guide you will have a Logos Blockchain node running 
 4. Click **Choose OS** → **Raspberry Pi OS (other)** → **Raspberry Pi OS Lite (64-bit)**.
    - "Lite" means no desktop — that is what we want for a headless server.
 5. Click **Choose Storage** → select your SD card.
-6. Click the **gear icon** (or press `Ctrl+Shift+X`) to open **Advanced settings**:
+6. Click the **⚙️ gear icon** (or press `Ctrl+Shift+X`) to open **Advanced Options**:
+   - Set a **hostname** — use `logos-node` (this is the name your Pi will advertise on the network).
    - Check **Enable SSH** → select **Use password authentication**.
-   - Set a **hostname** (e.g., `logosnode`).
    - Set a **username** (e.g., `pi`) and a strong **password** — write this down.
-   - *(Optional)* Configure your Wi-Fi credentials if you are not using ethernet.
+   - Enter your **WiFi SSID and password** for the workshop network.
+   - Set your **locale and timezone** (e.g., `Europe/Lisbon`).
 7. Click **Save**, then **Write**. Confirm when prompted.
 
-> **📸 Screenshot placeholder:** *Raspberry Pi Imager — Advanced settings screen showing SSH enabled.*
+> **📸 Screenshot placeholder:** *Raspberry Pi Imager — Advanced Options screen showing SSH enabled, hostname, and WiFi configured.*
 
 > **⚠️ Note:** Writing will erase everything on the SD card. Make sure you have the right drive selected.
+
+### Adding a second WiFi network (home + workshop)
+
+Raspberry Pi Imager only lets you enter one WiFi network. If you want the Pi to also connect to your home network automatically when you bring it back, you can add it by editing the SD card directly after flashing.
+
+**The file to edit:** `wpa_supplicant.conf` on the `boot` partition of the SD card.
+
+- **Windows**: the `boot` partition appears as a drive in File Explorer (e.g., `D:\`).
+- **Mac**: it mounts in Finder automatically (look for `boot` on the desktop or in the sidebar).
+- **Linux**: it mounts automatically at `/media/<user>/boot` or similar.
+
+Open `wpa_supplicant.conf` in any text editor and replace its contents with:
+
+```
+country=PT
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+
+network={
+    ssid="WorkshopWiFi"
+    psk="workshoppassword"
+    priority=1
+}
+
+network={
+    ssid="HomeWiFi"
+    psk="homepassword"
+    priority=2
+}
+```
+
+Replace `WorkshopWiFi` / `workshoppassword` and `HomeWiFi` / `homepassword` with your actual credentials. **Higher priority number = tried first**, so setting home WiFi to `priority=2` means the Pi will connect home when it is back from the workshop.
+
+> **💡 Tip:** If you already set a WiFi in Imager's Advanced Options, you will see a `network={...}` block already in the file. You can add a second `network={...}` block below it — the Pi will try both.
 
 ---
 
@@ -60,7 +95,7 @@ Welcome! By the end of this guide you will have a Logos Blockchain node running 
 3. Connect the power supply — the Pi will boot automatically (no power button).
 4. Wait about 60–90 seconds for the first boot to complete.
 5. Find the Pi's IP address — pick one of these methods:
-   - Log into your **router admin page** (usually `192.168.1.1` or `192.168.0.1`) and look at connected devices. Find the entry named `logosnode`.
+   - Log into your **router admin page** (usually `192.168.1.1` or `192.168.0.1`) and look at connected devices. Find the entry named `logos-node`.
    - Or run this command on your computer (macOS/Linux):
      ```bash
      nmap -sn 192.168.1.0/24
@@ -94,49 +129,11 @@ This may take a few minutes. You will see a lot of text scrolling — that is no
 
 ---
 
-## Step 4: Install Docker
+## Step 4: Install logosup
 
-> **What this does:** Installs Docker, the software that packages and runs the Logos node in an isolated container. This is the officially recommended way to run a Logos node.
+> **What this does:** Downloads the `logosup` tool, which automates everything needed to set up and run a Logos node — including Docker setup, downloading the node software, generating your wallet keys, and starting the node.
 
-Run the official Docker install script:
-
-```bash
-curl -fsSL https://get.docker.com | sh
-```
-
-After the script finishes, add your user to the `docker` group so you can run Docker commands without `sudo`:
-
-```bash
-sudo usermod -aG docker $USER
-```
-
-Then **log out and log back in** so the group change takes effect:
-
-```bash
-exit
-```
-
-SSH back in again:
-
-```bash
-ssh pi@192.168.1.42
-```
-
-Verify Docker is working:
-
-```bash
-docker run hello-world
-```
-
-You should see a message saying **"Hello from Docker!"**.
-
-> **🔗 Reference:** Docker documentation — https://docs.docker.com/engine/install/debian/
-
----
-
-## Step 5: Install logosup
-
-> **What this does:** Downloads the `logosup` tool, which automates everything needed to set up and run a Logos node — downloading the node software, generating your wallet keys, and starting the node.
+> **Note on Docker:** `logosup` handles Docker automatically — you don't need to install it separately. If you prefer to set everything up manually (recommended for production/mainnet), follow the [official CLI guide](https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md). For this workshop we'll use `logosup` which automates the entire Docker setup.
 
 Run the installer:
 
@@ -165,7 +162,7 @@ The installer will:
 
 ---
 
-## Step 6: Verify your node is running
+## Step 5: Verify your node is running
 
 > **What this does:** Confirms that your node has started and is connecting to the Logos network.
 
@@ -192,13 +189,17 @@ Press `Ctrl+C` to stop following the logs.
 
 ---
 
-## Step 7: Port forwarding (if needed)
+## Step 6: Port forwarding (optional — for better connectivity)
 
-> **What this does:** Allows other nodes on the internet to connect to your node directly, making the network stronger.
+> **What this does:** Allows other nodes on the internet to connect to your node directly, which improves peer discovery and makes the network stronger.
 
-The Logos node uses **port 3000/UDP** for peer-to-peer connections. If your Pi is behind a home router (which it almost certainly is), you may need to tell your router to forward this port to the Pi.
+**Port forwarding is not strictly required for the workshop.** Your node can connect outbound to bootstrap peers and participate in the testnet without it. If your peer count stays at 0 after 30 minutes, it is worth trying.
 
-Steps vary by router brand. In general:
+The Logos node uses **port 3000/UDP** for peer-to-peer connections. If your Pi is behind a home router (which it almost certainly is), forwarding this port lets other nodes reach yours directly.
+
+> **💡 Check UPnP first:** Many modern routers support UPnP (Universal Plug and Play), which can handle port forwarding automatically without any manual steps. Log into your router admin page and look for a UPnP setting — if it is enabled, port forwarding may already be working.
+
+If you need to set it up manually, the general steps are:
 
 1. Log into your router admin page (usually `192.168.1.1`)
 2. Find **Port Forwarding** (sometimes under "Advanced" or "NAT")
@@ -209,47 +210,49 @@ Steps vary by router brand. In general:
    - **Internal port**: 3000
 4. Save and apply
 
-> **🔗 Reference:** Generic port forwarding guide — https://portforward.com/
+> **🔗 Reference:** Generic port forwarding guide — https://www.wikihow.com/Set-Up-Port-Forwarding-on-a-Router
 
-> **💡 Tip:** If you are not sure whether port forwarding is needed, check `logosup status` after your node has been running for 30+ minutes. If peer count is greater than 0, you are already connected to the network.
+> **💡 Tip:** Run `logosup status` after your node has been running for 30+ minutes. If peer count is greater than 0, you are already connected to the network and port forwarding is working or not needed.
 
 ---
 
-## Step 8: Back up your node
+## Step 7: Back up your node
 
-> **What this does:** Saves a copy of your wallet keys and configuration so you can restore your node if the SD card fails or if you move to a new Pi.
+> **What this does:** Saves a copy of your wallet keys so you can restore your node if the SD card fails or if you move to a new Pi.
 
-### What to back up
-
-The most important files are in `~/.logos-node/` on the Pi:
-
-| File/Directory | Why it matters |
-|----------------|---------------|
-| `~/.logos-node/user_config.yaml` | Your node configuration including generated keys |
-| `~/.logos-node/data/` | Node state (RocksDB) — large, but good to back up periodically |
-
-### How to back up
-
-From your computer (not the Pi), run:
+Run this command on the Pi:
 
 ```bash
-scp pi@192.168.1.42:~/.logos-node/user_config.yaml ./logos-node-config-backup.yaml
+logosup keys backup
 ```
 
-To back up the full data directory:
+Output looks like:
+
+```
+✔ Wallet keys backed up to logos-node-keys.backup.yaml
+```
+
+Then display the backup file:
+
+```bash
+cat logos-node-keys.backup.yaml
+```
+
+Copy the output and save it somewhere safe — a password manager, a printed piece of paper, or an encrypted note. That is all you need for the workshop.
+
+> **⚠️ Important:** These keys cannot be recovered if lost. Back them up before leaving the workshop.
+
+### Advanced: full data directory backup (for Mainnet)
+
+*This section is not needed for the workshop — skip it for now.*
+
+If you ever run a mainnet node and want to move your full node state to a new machine, copy the entire data directory from your computer (not the Pi):
 
 ```bash
 scp -r pi@192.168.1.42:~/.logos-node/data/ ./logos-node-data-backup/
 ```
 
-> **💡 Tip:** You can also copy files to a USB drive plugged into the Pi, using `cp ~/.logos-node/user_config.yaml /media/usb/logos-node-config-backup.yaml` (mount path may vary).
-
-### How often to back up
-
-- **`user_config.yaml`**: Back up immediately after install and any time you change configuration. This file rarely changes.
-- **`data/` directory**: Weekly or before any software update is a good habit.
-
-> **📸 Screenshot placeholder:** *Terminal showing `scp` command completing successfully.*
+This preserves the RocksDB state directory. For most users, restoring from the key backup alone is sufficient — the node will resync chain data from peers on a fresh install.
 
 ---
 
@@ -276,7 +279,7 @@ Or log out and back in via SSH.
 
 - Check that your internet connection is working: `ping google.com`
 - Check that Docker is running: `docker ps`
-- Check port forwarding (Step 7) — your node may not be reachable by peers
+- Check port forwarding (Step 6) — your node may not be reachable by peers
 - Try restarting the node: `logosup stop && logosup start`
 
 ### Node was running but stopped after a Pi reboot
@@ -302,10 +305,12 @@ logosup logs --tail=50
 | logosup GitHub | https://github.com/logosnode/logosup |
 | Logos project website | https://logos.co/ |
 | Logos Blockchain quickstart guide | https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/quickstart-guide-for-the-logos-blockchain-node.md |
+| Manual CLI install guide | https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md |
 | Testnet faucet | https://testnet.blockchain.logos.co/web/faucet/ |
 | Testnet dashboard | https://testnet.blockchain.logos.co/web/ |
 | Raspberry Pi documentation | https://www.raspberrypi.com/documentation/ |
 | Docker documentation | https://docs.docker.com/ |
+| Port forwarding guide | https://www.wikihow.com/Set-Up-Port-Forwarding-on-a-Router |
 | Logos Circle Lisbon | *[Contact placeholder — add your group link or email here]* |
 
 ---
