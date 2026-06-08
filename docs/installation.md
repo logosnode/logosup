@@ -1,6 +1,6 @@
 # Installation & Docker setup
 
-`logosup` automates the full [Logos Blockchain quickstart](https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/quickstart-guide-for-the-logos-blockchain-node.md) flow.
+`logosup` automates the full [Logos Blockchain quickstart](https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md) flow.
 
 ## What `install.sh` does
 

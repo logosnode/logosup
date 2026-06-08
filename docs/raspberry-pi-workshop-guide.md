@@ -46,7 +46,7 @@ Welcome! By the end of this guide you will have a Logos Blockchain node running 
    - Set your **locale and timezone** (e.g., `Europe/Lisbon`).
 7. Click **Save**, then **Write**. Confirm when prompted.
 
-> **📸 Screenshot placeholder:** *Raspberry Pi Imager — Advanced Options screen showing SSH enabled, hostname, and WiFi configured.*
+The Advanced Options screen should show SSH toggled on, your chosen hostname (e.g. `logos-node`), and the WiFi credentials filled in before you proceed.
 
 > **⚠️ Note:** Writing will erase everything on the SD card. Make sure you have the right drive selected.
 
@@ -107,7 +107,7 @@ Replace `WorkshopWiFi` / `workshoppassword` and `HomeWiFi` / `homepassword` with
    ```
    Enter the password you set in Step 1 when prompted.
 
-> **📸 Screenshot placeholder:** *Terminal window showing a successful SSH login to the Pi.*
+On a successful login you'll see a Raspberry Pi OS welcome banner followed by a prompt like `pi@logos-node:~ $`.
 
 > **💡 Tip:** On Windows, open PowerShell or Command Prompt and type the same `ssh pi@<IP>` command. OpenSSH is included in Windows 10/11 by default.
 
@@ -158,7 +158,7 @@ The installer will:
 
 > **⚠️ Note:** When the installer displays your **wallet keys**, write them down or copy them somewhere safe immediately. These keys are how your node participates in the network and holds any tokens. If you lose them, you cannot recover them.
 
-> **📸 Screenshot placeholder:** *Terminal showing `logosup install` completing and displaying wallet keys.*
+Once the installer finishes, the terminal will print your wallet public key and private key. Copy these to a safe location before continuing — they will not be shown again.
 
 ---
 
@@ -304,7 +304,7 @@ logosup logs --tail=50
 |----------|------|
 | logosup GitHub | https://github.com/logosnode/logosup |
 | Logos project website | https://logos.co/ |
-| Logos Blockchain quickstart guide | https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/quickstart-guide-for-the-logos-blockchain-node.md |
+| Logos Blockchain quickstart guide | https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md |
 | Manual CLI install guide | https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md |
 | Testnet faucet | https://testnet.blockchain.logos.co/web/faucet/ |
 | Testnet dashboard | https://testnet.blockchain.logos.co/web/ |
