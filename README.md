@@ -51,7 +51,6 @@ Missing prerequisites are auto-installed via the system package manager (apt, dn
 ## Links
 
 - [Logos Blockchain quickstart guide](https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md)
-- [Manual CLI install guide](https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md) — for production/mainnet without logosup
 - [Logos Blockchain releases](https://github.com/logos-blockchain/logos-blockchain/releases/)
 - [Testnet faucet](https://testnet.blockchain.logos.co/web/faucet/) · [Testnet dashboard](https://testnet.blockchain.logos.co/web/)
 - [Logos website](https://logos.co/)

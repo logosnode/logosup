@@ -242,17 +242,64 @@ Copy the output and save it somewhere safe — a password manager, a printed pie
 
 > **⚠️ Important:** These keys cannot be recovered if lost. Back them up before leaving the workshop.
 
-### Advanced: full data directory backup (for Mainnet)
+### Advanced: Keeping your node secure on Mainnet
 
-*This section is not needed for the workshop — skip it for now.*
-
-If you ever run a mainnet node and want to move your full node state to a new machine, copy the entire data directory from your computer (not the Pi):
+For Mainnet, keep your `logos-node-keys.backup.yaml` file extra secure — store it in a password manager, encrypted storage, or printed and locked away. If you want to also copy the full data directory off the Pi:
 
 ```bash
-scp -r pi@192.168.1.42:~/.logos-node/data/ ./logos-node-data-backup/
+scp -r pi@logos-node.local:/home/pi/.logos ~/logos-backup
 ```
 
-This preserves the RocksDB state directory. For most users, restoring from the key backup alone is sufficient — the node will resync chain data from peers on a fresh install.
+---
+
+## Next Steps — Useful Commands
+
+**Node status:**
+```bash
+logosup status
+```
+Shows whether your node is running, current block height, and how many peers you're connected to. Run this any time you want to check your node is healthy.
+
+**Wallet — check balance:**
+```bash
+logosup wallet balance
+```
+Shows your wallet address and current balance.
+
+**Wallet — send a transfer:**
+```bash
+logosup wallet transfer
+```
+Walks you through sending tokens to another address. Follow the interactive prompts.
+
+**View logs (live):**
+```bash
+logosup logs
+```
+Shows the live output from your node. Press `Ctrl+C` to stop watching. Useful for troubleshooting.
+
+**Stop / start / restart:**
+```bash
+logosup stop
+logosup start
+logosup restart
+```
+
+**Grafana monitoring dashboard:**
+
+If you enabled monitoring during install, open this in your browser to see charts of your node's performance, block sync progress, and peer connections:
+
+```
+https://localhost:3001
+```
+
+Or from another device on the same network: `https://logos-node.local:3001`. Your browser will show a security warning on first visit — accept it to proceed (it's a self-signed certificate generated locally).
+
+**Update the node:**
+```bash
+logosup update
+```
+Downloads and applies the latest version. Run this periodically to stay in sync.
 
 ---
 
@@ -305,7 +352,6 @@ logosup logs --tail=50
 | logosup GitHub | https://github.com/logosnode/logosup |
 | Logos project website | https://logos.co/ |
 | Logos Blockchain quickstart guide | https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md |
-| Manual CLI install guide | https://github.com/logos-co/logos-docs/blob/main/docs/blockchain/get-started/run-a-logos-blockchain-node-from-cli.md |
 | Testnet faucet | https://testnet.blockchain.logos.co/web/faucet/ |
 | Testnet dashboard | https://testnet.blockchain.logos.co/web/ |
 | Raspberry Pi documentation | https://www.raspberrypi.com/documentation/ |
