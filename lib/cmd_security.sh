@@ -288,6 +288,32 @@ _check_permissions() {
     fi
 }
 
+# Flag ufw-docker presence when the bridged monitoring stack is installed. The
+# node itself uses host networking on Linux (so its QUIC port is unaffected by
+# ufw-docker's DOCKER-USER UDP drops), but Grafana stays on the bridge — and
+# ufw-docker will block LAN access to it until the operator allows the port
+# explicitly. Warn-only; no auto-apply, since `ufw-docker allow` needs root
+# and the exact command is operator-environment specific.
+_check_ufw_docker() {
+    [[ "$LOGOS_OS" == "linux" ]] || return 0
+
+    # The ufw-docker shell helper edits /etc/ufw/after.rules; the binary itself
+    # may not stick around in PATH after install. Match either signal.
+    local has_rules=false has_bin=false
+    grep -qE '^-A DOCKER-USER' /etc/ufw/after.rules 2>/dev/null && has_rules=true
+    command -v ufw-docker &>/dev/null && has_bin=true
+    [[ "$has_rules" == "false" && "$has_bin" == "false" ]] && return 0
+
+    # Only warn when there's actually a bridged surface affected. Gate on the
+    # monitoring compose existing on disk, not on the stack running — the
+    # block applies regardless of whether Grafana is currently up.
+    local mon_compose="$LOGOS_NODE_DIR/docker-compose.monitoring.yml"
+    [[ -f "$mon_compose" ]] || return 0
+
+    _add_finding "warn" "ufw-docker" \
+        "detected — may block LAN access to Grafana (${LOGOS_GRAFANA_PORT}/tcp). Allow with: sudo ufw-docker allow logos-grafana 3000/tcp"
+}
+
 # ── Scan (report only) ──────────────────────────────────────────────
 
 _security_scan() {
@@ -316,6 +342,7 @@ _security_scan() {
     _check_auto_updates
     _check_fail2ban
     _check_permissions
+    _check_ufw_docker
 
     # Print findings
     for finding in "${FINDINGS[@]}"; do
@@ -363,6 +390,18 @@ _security_apply() {
     _check_auto_updates
     _check_fail2ban
     _check_permissions
+    _check_ufw_docker
+
+    # ufw-docker finding is informational — surface it up-front so the operator
+    # sees it before the interactive prompts. No corresponding _apply step;
+    # the suggested command needs root and is environment-specific.
+    for finding in "${FINDINGS[@]}"; do
+        if [[ "$finding" == *"ufw-docker"* ]]; then
+            echo -e "  $finding"
+            echo ""
+            break
+        fi
+    done
 
     local changes_made=0
 

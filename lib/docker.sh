@@ -89,7 +89,14 @@ check_docker() {
     export DOCKER_COMPOSE DOCKER_CMD
 }
 
-# Generate docker-compose.yml from settings
+# Generate docker-compose.yml from settings.
+#
+# Two shapes depending on $LOGOS_DOCKER_NETWORK_MODE:
+#   host   — node shares the host net namespace. No docker port mapping, no
+#            bridge. Linux default. Sidesteps ufw-docker's DOCKER-USER UDP
+#            drops that break QUIC on bridged containers (issue #18).
+#   bridge — original behavior. Mac/Docker Desktop default; Linux opt-out
+#            for operators who customize LOGOS_API_PORT / LOGOS_UDP_PORT.
 generate_compose_file() {
     local compose_path
     compose_path="$(get_compose_path)"
@@ -101,7 +108,40 @@ generate_compose_file() {
     local host_gid
     host_gid="$(id -g)"
 
-    cat > "$compose_path" << YAML
+    if [[ "$LOGOS_DOCKER_NETWORK_MODE" == "host" ]]; then
+        cat > "$compose_path" << YAML
+services:
+  logos-node:
+    build:
+      context: ${dockerfile_dir}
+      args:
+        NODE_VERSION: "${LOGOS_NODE_VERSION}"
+        CIRCUITS_VERSION: "${LOGOS_CIRCUITS_VERSION}"
+    image: ${LOGOS_DOCKER_IMAGE}:${LOGOS_NODE_VERSION}
+    container_name: ${LOGOS_CONTAINER_NAME}
+    restart: unless-stopped
+    user: "${host_uid}:${host_gid}"
+    network_mode: host
+    working_dir: /app/data
+    volumes:
+      - ${LOGOS_NODE_DIR}/user_config.yaml:/app/data/user_config.yaml:ro
+      - ${LOGOS_NODE_DIR}/data:/app/data
+    environment:
+      - LOGOS_BLOCKCHAIN_CIRCUITS=/app/circuits
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/cryptarchia/info"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+YAML
+    else
+        cat > "$compose_path" << YAML
 services:
   logos-node:
     build:
@@ -140,8 +180,23 @@ networks:
   logosnode-net:
     name: logosnode-net
 YAML
+    fi
 
     log_success "Generated docker-compose.yml"
+    log_dim "Networking mode: ${LOGOS_DOCKER_NETWORK_MODE}"
+}
+
+# Under host networking, the node binary listens on its own internal defaults
+# (HTTP 8080, QUIC 3000) and Docker's host:container port mapping no longer
+# applies — so LOGOS_API_PORT and LOGOS_UDP_PORT customizations silently lose
+# effect. Surface this once after compose generation so the operator can
+# either revert the custom port or opt back into bridge networking.
+warn_custom_ports_under_host_net() {
+    [[ "$LOGOS_DOCKER_NETWORK_MODE" == "host" ]] || return 0
+    [[ "$LOGOS_API_PORT" != "8080" || "$LOGOS_UDP_PORT" != "3000" ]] || return 0
+
+    log_warn "Custom API/UDP ports (${LOGOS_API_PORT}/${LOGOS_UDP_PORT}) are ignored under host networking."
+    log_info "To keep your custom ports, set ${BOLD}LOGOS_DOCKER_NETWORK_MODE=bridge${RESET} in ${LOGOS_SETTINGS_FILE}"
 }
 
 # Build the Docker image
@@ -248,6 +303,19 @@ docker_init_config() {
     fi
 }
 
+# Endpoint the node should push OTLP metrics to. Depends on the network mode:
+# under bridge, the otel collector is reachable via compose's container DNS;
+# under host networking, the node container shares the host net namespace and
+# can't resolve the bridge-internal DNS name, so it pushes to the loopback port
+# we publish on the otel service (see lib/monitoring.sh).
+_otlp_endpoint_for_mode() {
+    if [[ "$LOGOS_DOCKER_NETWORK_MODE" == "host" ]]; then
+        echo "http://127.0.0.1:4317"
+    else
+        echo "http://logos-otel:4317"
+    fi
+}
+
 # Enable OTLP metrics push in user_config.yaml so logos-otel can collect
 # native node metrics. Idempotent: only rewrites `metrics: None`. If metrics
 # is already configured (e.g. operator customized it) we leave it alone.
@@ -258,19 +326,57 @@ patch_user_config_for_otlp() {
     [[ -f "$config_path" ]] || return 0
     grep -qE '^[[:space:]]+metrics: None$' "$config_path" || return 0
 
-    awk '
+    local otlp_endpoint
+    otlp_endpoint="$(_otlp_endpoint_for_mode)"
+
+    awk -v endpoint="$otlp_endpoint" '
       /^[[:space:]]+metrics: None$/ {
         match($0, /^[[:space:]]+/)
         indent = substr($0, 1, RLENGTH)
         print indent "metrics: !Otlp"
-        print indent "  endpoint: \"http://logos-otel:4317\""
+        print indent "  endpoint: \"" endpoint "\""
         print indent "  host_identifier: \"logos-node\""
         next
       }
       { print }
     ' "$config_path" > "${config_path}.tmp" && mv "${config_path}.tmp" "$config_path"
     chmod 600 "$config_path"
-    log_dim "Enabled OTLP metrics push to logos-otel (for monitoring stack)"
+    log_dim "Enabled OTLP metrics push to ${otlp_endpoint} (for monitoring stack)"
+}
+
+# Migrate an existing user_config.yaml OTLP endpoint to match the current
+# network mode. Used on `logosup update` so 0.4.3 installs (which baked in
+# `http://logos-otel:4317`) get rewritten to `http://127.0.0.1:4317` after
+# switching to host networking on Linux. Reversible: opting back into bridge
+# mode rewrites the endpoint the other way.
+#
+# Idempotent no-op when:
+#   - $config_path does not exist
+#   - No `endpoint:` line is present (metrics block absent / operator opted out)
+#   - The endpoint already matches the desired mode
+#
+# Never touches custom endpoints — only the two values this CLI is known to
+# write. An operator who pointed metrics at their own collector is unaffected.
+migrate_user_config_otlp_endpoint() {
+    local config_path="$1"
+    [[ -f "$config_path" ]] || return 0
+
+    local desired old
+    desired="$(_otlp_endpoint_for_mode)"
+    if [[ "$desired" == "http://127.0.0.1:4317" ]]; then
+        old="http://logos-otel:4317"
+    else
+        old="http://127.0.0.1:4317"
+    fi
+
+    grep -qE '^[[:space:]]+endpoint:[[:space:]]*"' "$config_path" || return 0
+    grep -qE "endpoint:[[:space:]]*\"${desired}\"" "$config_path" && return 0
+    # Regex-escape dots in the source pattern so they don't act as wildcards.
+    local old_escaped="${old//./\\.}"
+    grep -qE "endpoint:[[:space:]]*\"${old_escaped}\"" "$config_path" || return 0
+
+    sed_inplace "s|endpoint: \"${old_escaped}\"|endpoint: \"${desired}\"|" "$config_path"
+    log_dim "Migrated OTLP endpoint → ${desired}"
 }
 
 # Disable the tracing module's disk-based file output. The default config

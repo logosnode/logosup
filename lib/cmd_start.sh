@@ -25,12 +25,34 @@ cmd_start() {
         return 0
     fi
 
-    # Regenerate compose if port settings changed
+    # Regenerate compose if the on-disk file disagrees with current settings.
+    # Two flavors of drift: network mode (host vs bridge) and host port mapping
+    # (bridge mode only — host mode has no port maps to drift).
     if [[ -f "$compose_path" ]]; then
-        if ! grep -q "\"${LOGOS_API_PORT}:8080\"" "$compose_path" 2>/dev/null || \
-           ! grep -q "\"${LOGOS_UDP_PORT}:3000/udp\"" "$compose_path" 2>/dev/null; then
-            log_info "Port settings changed — regenerating docker-compose.yml"
+        local needs_regen=false
+        local file_has_host_mode=false
+        grep -q '^[[:space:]]*network_mode:[[:space:]]*host' "$compose_path" 2>/dev/null && file_has_host_mode=true
+
+        if [[ "$LOGOS_DOCKER_NETWORK_MODE" == "host" ]] && [[ "$file_has_host_mode" == "false" ]]; then
+            log_info "Switching to host networking — regenerating docker-compose.yml"
+            needs_regen=true
+        elif [[ "$LOGOS_DOCKER_NETWORK_MODE" != "host" ]] && [[ "$file_has_host_mode" == "true" ]]; then
+            log_info "Switching to bridge networking — regenerating docker-compose.yml"
+            needs_regen=true
+        elif [[ "$LOGOS_DOCKER_NETWORK_MODE" != "host" ]]; then
+            if ! grep -q "\"${LOGOS_API_PORT}:8080\"" "$compose_path" 2>/dev/null || \
+               ! grep -q "\"${LOGOS_UDP_PORT}:3000/udp\"" "$compose_path" 2>/dev/null; then
+                log_info "Port settings changed — regenerating docker-compose.yml"
+                needs_regen=true
+            fi
+        fi
+
+        if [[ "$needs_regen" == "true" ]]; then
             generate_compose_file
+            # OTLP endpoint baked into user_config.yaml depends on the network
+            # mode (logos-otel DNS under bridge, 127.0.0.1 under host). Rewrite
+            # if the mode just flipped. Idempotent / no-op otherwise.
+            migrate_user_config_otlp_endpoint "$(get_user_config_path)"
         fi
     fi
 

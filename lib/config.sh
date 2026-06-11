@@ -83,10 +83,26 @@ _set_defaults() {
     : "${LOGOS_GRAFANA_AUTH:=false}"
     : "${LOGOS_GRAFANA_PASSWORD:=logos}"
 
+    # Docker network mode for the node container. Default to host networking on
+    # Linux so ufw-docker's DOCKER-USER deny rules (which drop UDP dport ≤32767
+    # to container IPs) can't kill the node's QUIC handshake replies — see
+    # https://github.com/logosnode/logosup/issues/18. Bridge stays the default
+    # everywhere else (Docker Desktop on macOS doesn't honor host mode).
+    # Operators with custom ports or other host-net problems can opt out by
+    # setting LOGOS_DOCKER_NETWORK_MODE=bridge in settings.env — that value is
+    # sourced before this function runs, so the override wins.
+    if [[ -z "${LOGOS_DOCKER_NETWORK_MODE:-}" ]]; then
+        if [[ "$(uname -s)" == "Linux" ]]; then
+            LOGOS_DOCKER_NETWORK_MODE="host"
+        else
+            LOGOS_DOCKER_NETWORK_MODE="bridge"
+        fi
+    fi
+
     export LOGOS_NETWORK LOGOS_NODE_VERSION LOGOS_CIRCUITS_VERSION LOGOS_API_PORT LOGOS_UDP_PORT
     export LOGOS_FAUCET_URL LOGOS_DASHBOARD_URL LOGOS_DOCKER_IMAGE LOGOS_CONTAINER_NAME
     export LOGOS_NODE_REPO LOGOS_CLI_REPO LOGOS_BOOTSTRAP_PEERS LOGOS_GRAFANA_PORT
-    export LOGOS_GRAFANA_AUTH LOGOS_GRAFANA_PASSWORD
+    export LOGOS_GRAFANA_AUTH LOGOS_GRAFANA_PASSWORD LOGOS_DOCKER_NETWORK_MODE
 }
 
 # ── Init & Load ───────────────────────────────────────────────────────

@@ -47,6 +47,7 @@ cmd_install() {
 
     # 5. Generate docker-compose.yml
     generate_compose_file
+    warn_custom_ports_under_host_net
 
     # 6. Build Docker image
     docker_build || die "Docker build failed. Check the output above for details."
