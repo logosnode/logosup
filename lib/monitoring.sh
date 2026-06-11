@@ -57,6 +57,22 @@ generate_monitoring_compose_file() {
 
     log_step "Generating monitoring compose file..."
 
+    # Under host networking the node container leaves the bridge, so the
+    # exporter can no longer reach it via compose DNS (logos-node:8080) and
+    # the node can no longer reach the otel collector via DNS either. Re-point
+    # both via host.docker.internal / loopback. Bridge mode is unchanged.
+    local node_api_url exporter_host_block otel_host_ports
+    if [[ "$LOGOS_DOCKER_NETWORK_MODE" == "host" ]]; then
+        node_api_url="http://host.docker.internal:${LOGOS_API_PORT}"
+        exporter_host_block=$'    extra_hosts:\n      - "host.docker.internal:host-gateway"'
+        # Bind 4317 to loopback only — never publish OTLP to the LAN.
+        otel_host_ports=$'    ports:\n      - "127.0.0.1:4317:4317"'
+    else
+        node_api_url="http://${LOGOS_CONTAINER_NAME}:8080"
+        exporter_host_block=""
+        otel_host_ports=""
+    fi
+
     cat > "$compose_path" << COMPOSE
 services:
   logos-exporter:
@@ -67,10 +83,11 @@ services:
     ports:
       - "9100:9100"
     environment:
-      - NODE_API_URL=http://${LOGOS_CONTAINER_NAME}:8080
+      - NODE_API_URL=${node_api_url}
       - CONTAINER_NAME=${LOGOS_CONTAINER_NAME}
       - POLL_INTERVAL=15
     pid: host
+${exporter_host_block}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc:/host/proc:ro
@@ -95,6 +112,7 @@ services:
       - "4317"  # OTLP gRPC (node pushes here)
       - "4318"  # OTLP HTTP
       - "8889"  # Prometheus scrape
+${otel_host_ports}
     logging:
       driver: json-file
       options:

@@ -238,6 +238,7 @@ cmd_update() {
                     save_setting "LOGOS_NODE_VERSION" "$LOGOS_NODE_VERSION"
                     save_setting "LOGOS_CIRCUITS_VERSION" "$LOGOS_CIRCUITS_VERSION"
                     generate_compose_file
+                    warn_custom_ports_under_host_net
                     source "$LOGOS_NODE_LIB/cmd_reset.sh"
                     _perform_migration "update" "true"
                     return 0
@@ -261,6 +262,8 @@ cmd_update() {
                 save_setting "LOGOS_CIRCUITS_VERSION" "$LOGOS_CIRCUITS_VERSION"
 
                 generate_compose_file
+                warn_custom_ports_under_host_net
+                migrate_user_config_otlp_endpoint "$(get_user_config_path)"
                 docker_build || die "Failed to build updated Docker image"
 
                 log_success "Node updated to ${LOGOS_NODE_VERSION}"
@@ -292,6 +295,8 @@ cmd_update() {
                 echo ""
                 log_info "Node compose schema changed — regenerating docker-compose.yml"
                 generate_compose_file
+                warn_custom_ports_under_host_net
+                migrate_user_config_otlp_endpoint "$(get_user_config_path)"
                 if docker_is_running; then
                     if confirm "Recreate the container now to apply the new compose?"; then
                         log_step "Recreating node container..."
