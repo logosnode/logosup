@@ -82,11 +82,15 @@ _set_defaults() {
     : "${LOGOS_GRAFANA_PORT:=3001}"
     : "${LOGOS_GRAFANA_AUTH:=false}"
     : "${LOGOS_GRAFANA_PASSWORD:=logos}"
+    # Optional: public IPv4 for nodes with a known static IP. When set, we pass
+    # --external-address /ip4/<ip>/udp/<port>/quic-v1 to init-config so the
+    # node advertises this address to peers and disables NAT traversal.
+    : "${LOGOS_EXTERNAL_IP:=}"
 
     export LOGOS_NETWORK LOGOS_NODE_VERSION LOGOS_CIRCUITS_VERSION LOGOS_API_PORT LOGOS_UDP_PORT
     export LOGOS_FAUCET_URL LOGOS_DASHBOARD_URL LOGOS_DOCKER_IMAGE LOGOS_CONTAINER_NAME
     export LOGOS_NODE_REPO LOGOS_CLI_REPO LOGOS_BOOTSTRAP_PEERS LOGOS_GRAFANA_PORT
-    export LOGOS_GRAFANA_AUTH LOGOS_GRAFANA_PASSWORD
+    export LOGOS_GRAFANA_AUTH LOGOS_GRAFANA_PASSWORD LOGOS_EXTERNAL_IP
 }
 
 # ── Init & Load ───────────────────────────────────────────────────────
@@ -102,9 +106,12 @@ init_config() {
 # Override them here if needed.
 
 LOGOS_NODE_VERSION=latest
-LOGOS_CIRCUITS_VERSION=latest
 LOGOS_DOCKER_IMAGE=logos-node
 LOGOS_CONTAINER_NAME=logos-node
+
+# Optional: set this to your public IPv4 if the node has a known static IP.
+# When set, we advertise this address to peers and skip NAT traversal.
+# LOGOS_EXTERNAL_IP=203.0.113.42
 SETTINGS
         chmod 600 "$LOGOS_SETTINGS_FILE"
     fi
@@ -231,6 +238,13 @@ save_setting() {
 
 get_user_config_path() {
     echo "$LOGOS_NODE_DIR/user_config.yaml"
+}
+
+# Keystore file — separate from user_config.yaml since 0.2.0. Written by
+# init-config alongside user_config.yaml, holds the operator's secret keys.
+# Must stay chmod 600 like user_config.yaml.
+get_keystore_path() {
+    echo "$LOGOS_NODE_DIR/keystore.yaml"
 }
 
 get_compose_path() {

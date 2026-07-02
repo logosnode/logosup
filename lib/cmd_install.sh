@@ -82,6 +82,14 @@ cmd_install() {
         log_info "Check your keys with: logosup keys"
     fi
 
+    local keystore_path
+    keystore_path="$(get_keystore_path)"
+    if [[ -f "$keystore_path" ]]; then
+        echo ""
+        log_warn "Secret keys are stored in ${BOLD}${keystore_path}${RESET}"
+        log_info "${BOLD}Back this file up${RESET} — losing it means losing this node's identity."
+    fi
+
     echo ""
     log_step "Request testnet tokens"
     log_info "Visit the faucet to receive test tokens:"
