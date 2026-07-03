@@ -223,6 +223,12 @@ docker_init_config() {
             log_warn "Expected keystore.yaml alongside user_config.yaml but did not find it"
         fi
 
+        # Safety net for the API bind — --http-host on init-config should
+        # already put us on 0.0.0.0, but re-assert idempotently in case a
+        # flag change or hand-edit slips 127.0.0.1 back in (silently
+        # unreachable via the port map).
+        patch_user_config_for_http_bind "$config_path"
+
         # Enable OTLP metrics push so the monitoring stack can scrape native
         # node metrics (mempool, consensus, blend, KMS, storage, etc.) via the
         # OTel collector. Idempotent — only patches `metrics: None`.
@@ -290,7 +296,8 @@ docker_migrate_from_012() {
         migrate-from-0.1.2 \
         --old-config /app/user_config.yaml \
         --new-config /app/user_config.migrated.yaml \
-        --keystore /app/keystore.yaml 2>&1 | while IFS= read -r line; do
+        --keystore /app/keystore.yaml \
+        --http-host 0.0.0.0:8080 2>&1 | while IFS= read -r line; do
             echo -e "  ${DIM}${line}${RESET}"
         done
 
@@ -303,12 +310,34 @@ docker_migrate_from_012() {
     chmod 600 "$config_path"
     [[ -f "$keystore_path" ]] && chmod 600 "$keystore_path"
 
-    # Re-apply our compose-friendly tracing patches (idempotent).
+    # Re-apply our compose-friendly tracing + bind patches (all idempotent).
+    # patch_user_config_for_http_bind is a safety net: --http-host on
+    # migrate-from-0.1.2 covers new runs, but any config that predates that
+    # fix (or was hand-edited) is silently unreachable via the port map.
+    patch_user_config_for_http_bind "$config_path"
     patch_user_config_for_otlp "$config_path"
     patch_user_config_for_log_files "$config_path"
 
     log_success "Migrated to 0.2.0 config shape; wallet keys preserved in $keystore_path"
     return 0
+}
+
+# Rewrite api.backend.listen_address so the node binds 0.0.0.0 inside the
+# container. Docker's port map forwards host:8080 to container_ip:8080 — if
+# the node listens on 127.0.0.1:8080 inside the container, the forward can't
+# reach it and every host-side connection is reset by peer.
+#
+# init-config gets this right via --http-host, but migrate-from-0.1.2 in
+# older code paths didn't pass it, so 0.1.2 configs that carried
+# 127.0.0.1 through would land here silently broken. Idempotent: no-op if
+# the address is already 0.0.0.0:*.
+patch_user_config_for_http_bind() {
+    local config_path="$1"
+    [[ -f "$config_path" ]] || return 0
+    grep -qE '^[[:space:]]+listen_address:[[:space:]]*127\.0\.0\.1:' "$config_path" || return 0
+
+    sed_inplace 's|^\([[:space:]]\+\)listen_address:[[:space:]]*127\.0\.0\.1:|\1listen_address: 0.0.0.0:|' "$config_path"
+    log_dim "Patched api.backend.listen_address 127.0.0.1 → 0.0.0.0 (for Docker port map)"
 }
 
 # Enable OTLP metrics push in user_config.yaml so logos-otel can collect

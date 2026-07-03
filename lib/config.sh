@@ -251,6 +251,28 @@ get_compose_path() {
     echo "$LOGOS_NODE_DIR/docker-compose.yml"
 }
 
+# Look up the semantic role of a wallet public key from keystore.yaml.
+# keystore.yaml has a `public_keys:` block mapping role names
+# (LeaderFunding, VaucherMaster, Stake, SdpFunding, BlendZk, BlendSigning,
+# NetworkSwarm, ...) to their hex public keys. Given a hex key, echoes the
+# matching role, or nothing if unknown / keystore missing.
+get_wallet_key_role() {
+    local pk="$1"
+    [[ -z "$pk" ]] && return 1
+    local keystore
+    keystore="$(get_keystore_path)"
+    [[ -f "$keystore" ]] || return 1
+
+    awk -v needle="$pk" '
+        /^public_keys:[[:space:]]*$/ { in_block = 1; next }
+        in_block && /^[a-zA-Z]/       { in_block = 0 }
+        in_block && /^[[:space:]]+[A-Za-z][A-Za-z0-9]*:[[:space:]]*[a-f0-9]+/ {
+            role = $1; sub(/:$/, "", role)
+            if ($2 == needle) { print role; exit }
+        }
+    ' "$keystore"
+}
+
 # Parse known_keys from user_config.yaml
 get_wallet_keys() {
     local config
