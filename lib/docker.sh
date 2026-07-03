@@ -116,9 +116,16 @@ services:
       - "${LOGOS_API_PORT}:8080"
       - "${LOGOS_UDP_PORT}:3000/udp"
     working_dir: /app/data
+    # Config lives OUTSIDE /app/data on purpose — mounting a file inside a
+    # bind-mounted directory gets shadowed by the directory mount, and every
+    # patch to the host file (init-config output, migrate-from-0.1.2 output,
+    # OTLP/log/bind patches) becomes invisible to the running container.
+    # /app/config.yaml sidesteps the overlap; command: overrides the
+    # Dockerfile CMD to pick it up.
     volumes:
-      - ${LOGOS_NODE_DIR}/user_config.yaml:/app/data/user_config.yaml:ro
+      - ${LOGOS_NODE_DIR}/user_config.yaml:/app/config.yaml:ro
       - ${LOGOS_NODE_DIR}/data:/app/data
+    command: ["/app/config.yaml"]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/cryptarchia/info"]
       interval: 30s
