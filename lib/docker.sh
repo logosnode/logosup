@@ -290,6 +290,31 @@ docker_migrate_from_012() {
     local host_gid
     host_gid="$(id -g)"
 
+    # migrate-from-0.1.2 does NOT carry initial_peers over from the old
+    # config — the output always has network.backend.initial_peers: [] and
+    # cryptarchia.network.bootstrap.ibd.peers: [] unless we pass -p peers
+    # here (the release notes' quick-start relies on this too). Without
+    # this, migrated nodes come up with zero fleet contacts and only find
+    # peers through leftover DHT cache, which almost never surfaces the
+    # 0.2.0 fleet. Reuse the same LOGOS_BOOTSTRAP_PEERS the fresh-install
+    # path uses.
+    local migrate_args=(
+        migrate-from-0.1.2
+        --old-config /app/user_config.yaml
+        --new-config /app/user_config.migrated.yaml
+        --keystore /app/keystore.yaml
+        --http-host 0.0.0.0:8080
+        --ibd
+    )
+    local _p
+    IFS=',' read -ra _peers <<< "$LOGOS_BOOTSTRAP_PEERS"
+    for _p in "${_peers[@]}"; do
+        migrate_args+=("-p" "$_p")
+    done
+    if [[ -n "${LOGOS_EXTERNAL_IP:-}" ]]; then
+        migrate_args+=("--external-address" "/ip4/${LOGOS_EXTERNAL_IP}/udp/${LOGOS_UDP_PORT}/quic-v1")
+    fi
+
     log_step "Migrating 0.1.2 config to 0.2.0 (preserving wallet keys)..."
 
     # Old config passed in; new config written to a sibling path we rename after.
@@ -298,12 +323,7 @@ docker_migrate_from_012() {
         -v "${LOGOS_NODE_DIR}:/app" \
         -w /app \
         "${LOGOS_DOCKER_IMAGE}:${LOGOS_NODE_VERSION}" \
-        migrate-from-0.1.2 \
-        --old-config /app/user_config.yaml \
-        --new-config /app/user_config.migrated.yaml \
-        --keystore /app/keystore.yaml \
-        --http-host 0.0.0.0:8080 \
-        --ibd 2>&1 | while IFS= read -r line; do
+        "${migrate_args[@]}" 2>&1 | while IFS= read -r line; do
             echo -e "  ${DIM}${line}${RESET}"
         done
 
