@@ -53,8 +53,12 @@ _keys_show() {
 
     log_step "Wallet keys"
 
-    local keys
-    keys="$(get_wallet_keys)"
+    # LeaderFunding first, star + bold. Others get [Role] tags when the role
+    # is known via keystore.yaml. Falls back gracefully on pre-0.2.0 configs
+    # (no keystore → plain numbered list, same as before).
+    local keys leader_pk
+    keys="$(get_wallet_keys_prioritized)"
+    leader_pk="$(get_wallet_leader_pk 2>/dev/null)"
 
     if [[ -z "$keys" ]]; then
         log_warn "No keys found in $config_path"
@@ -62,11 +66,28 @@ _keys_show() {
     fi
 
     echo ""
-    local i=1
     while IFS= read -r key; do
-        log_info "  Key ${i}: ${BOLD}${key}${RESET}"
-        i=$((i + 1))
+        [[ -z "$key" ]] && continue
+        local role role_tag key_str is_leader=false
+        [[ "$key" == "$leader_pk" ]] && is_leader=true
+        role="$(get_wallet_key_role "$key" 2>/dev/null)"
+        if $is_leader; then
+            role_tag="${BOLD}${CYAN}★ [${role:-LeaderFunding}]${RESET} "
+            key_str="${BOLD}${key}${RESET}"
+        elif [[ -n "$role" ]]; then
+            role_tag="${DIM}[${role}]${RESET} "
+            key_str="${BOLD}${key}${RESET}"
+        else
+            role_tag=""
+            key_str="${BOLD}${key}${RESET}"
+        fi
+        log_info "  ${role_tag}${key_str}"
     done <<< "$keys"
+
+    if [[ -n "$leader_pk" ]]; then
+        echo ""
+        log_dim "★ = LeaderFunding — fund this key to participate in consensus"
+    fi
 
     echo ""
     log_info "Use these keys with the faucet to receive testnet tokens."
