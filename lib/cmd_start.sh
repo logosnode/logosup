@@ -112,11 +112,17 @@ _show_brief_status() {
 
     if [[ -n "$consensus" ]]; then
         local mode slot height
-        mode="$(echo "$consensus" | sed -E 's/.*"mode":"([^"]+)".*/\1/')"
+        # 0.2.0 wraps mode in an enum object: "mode":{"Started":"Bootstrapping"}.
+        # 0.1.x returned a scalar: "mode":"Bootstrapping". Try wrapped first,
+        # fall back to scalar, else leave empty.
+        mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*\{"[^"]+":[[:space:]]*"([^"]+)"\}.*/\1/p')"
+        if [[ -z "$mode" ]]; then
+            mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*"([^"]+)".*/\1/p')"
+        fi
         slot="$(echo "$consensus" | sed -E 's/.*"slot":([0-9]+).*/\1/')"
         height="$(echo "$consensus" | sed -E 's/.*"height":([0-9]+).*/\1/')"
 
-        log_info "Consensus mode: ${BOLD}${mode}${RESET}"
+        log_info "Consensus mode: ${BOLD}${mode:-unknown}${RESET}"
         log_info "Slot: ${slot}  |  Height: ${height}"
     fi
 
