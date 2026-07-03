@@ -131,7 +131,7 @@ cmd_status() {
 
         if [[ -n "$leader_pk" ]]; then
             echo ""
-            log_dim "★ = LeaderFunding — fund this key at ${LOGOS_FAUCET_URL} to participate in consensus"
+            log_dim "★ = LeaderFunding — fund this key to participate in consensus"
         fi
     fi
 
