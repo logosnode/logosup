@@ -59,7 +59,9 @@ _wallet_balance() {
     log_step "Wallet balance"
     echo ""
 
-    local keys
+    local keys leader_pk
+    leader_pk="$(get_wallet_leader_pk 2>/dev/null)"
+
     if [[ -n "$target_key" ]]; then
         # Allow user to pass either the full 64-hex key or just enough of a
         # prefix to disambiguate — match against known_keys.
@@ -74,7 +76,8 @@ _wallet_balance() {
             fi
         fi
     else
-        keys="$(get_wallet_keys 2>/dev/null)" || true
+        # LeaderFunding first, then the rest — same ordering as logosup status.
+        keys="$(get_wallet_keys_prioritized 2>/dev/null)" || true
         if [[ -z "$keys" ]]; then
             log_warn "No wallet keys found. Run ${BOLD}logosup install${RESET} first."
             return 1
@@ -89,12 +92,28 @@ _wallet_balance() {
         # and the WALLET_* globals wouldn't propagate back. Call bare, read globals.
         wallet_get_balance "$key"
 
+        # Annotate with the semantic role (LeaderFunding, VaucherMaster, ...)
+        # from keystore.yaml. Highlight the LeaderFunding row.
+        local role role_tag key_str is_leader=false
+        [[ "$key" == "$leader_pk" ]] && is_leader=true
+        role="$(get_wallet_key_role "$key" 2>/dev/null)"
+        if $is_leader; then
+            role_tag="${BOLD}${CYAN}★ [${role:-LeaderFunding}]${RESET} "
+            key_str="${BOLD}${key}${RESET}"
+        elif [[ -n "$role" ]]; then
+            role_tag="${DIM}[${role}]${RESET} "
+            key_str="${DIM}${key}${RESET}"
+        else
+            role_tag=""
+            key_str="${DIM}${key}${RESET}"
+        fi
+
         if [[ "$WALLET_HTTP_CODE" == "200" && -n "$WALLET_BODY" ]]; then
             local balance note_count
             balance="$(echo "$WALLET_BODY" | sed -E 's/.*"balance":([0-9]+).*/\1/')"
             # Count notes by counting the entries inside "notes":{...}
             note_count="$(echo "$WALLET_BODY" | grep -oE '"notes":\{[^}]*\}' | grep -oE '"[0-9a-f]{64}":' | wc -l | tr -d ' ')"
-            log_info "${DIM}${key}${RESET}  balance: ${BOLD}${balance}${RESET}  notes: ${note_count}"
+            log_info "${role_tag}${key_str}  balance: ${BOLD}${balance}${RESET}  notes: ${note_count}"
             if [[ "$balance" =~ ^[0-9]+$ ]]; then
                 total=$((total + balance))
                 any_ok=true
@@ -109,12 +128,15 @@ _wallet_balance() {
                         log_dim "    note ${nid}  ${nval}"
                     done
             fi
-        elif echo "$WALLET_BODY" | grep -qi "not found"; then
-            log_info "${DIM}${key}${RESET}  balance: ${BOLD}0${RESET} ${DIM}(no funds received yet)${RESET}"
+        elif echo "$WALLET_BODY" | grep -qiE "not (be )?found"; then
+            # 0.1.x: "not found". 0.2.0: "The requested address could not be
+            # found in the wallet". Both mean the wallet knows the key but
+            # hasn't seen inbound funds.
+            log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET} ${DIM}(no funds received yet)${RESET}"
         else
             local err
             err="$(wallet_squash_body "$WALLET_BODY" 120 "$WALLET_HTTP_CODE")"
-            log_info "${DIM}${key}${RESET}  balance: ${DIM}error (HTTP ${WALLET_HTTP_CODE}): ${err}${RESET}"
+            log_info "${role_tag}${key_str}  balance: ${DIM}error (HTTP ${WALLET_HTTP_CODE}): ${err}${RESET}"
             if [[ "$WALLET_HTTP_CODE" == "408" ]]; then
                 log_dim "    (timeout — node may be busy; retry, or check ${BOLD}logosup logs${RESET})"
             fi
@@ -124,6 +146,10 @@ _wallet_balance() {
     if $any_ok && [[ -z "$target_key" ]]; then
         echo ""
         log_info "Total: ${BOLD}${total}${RESET}"
+    fi
+    if [[ -z "$target_key" && -n "$leader_pk" ]]; then
+        echo ""
+        log_dim "★ = LeaderFunding — fund this key at ${LOGOS_FAUCET_URL} to participate in consensus"
     fi
     echo ""
 }

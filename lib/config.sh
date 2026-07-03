@@ -273,6 +273,40 @@ get_wallet_key_role() {
     ' "$keystore"
 }
 
+# Read the LeaderFunding public key from keystore.yaml — this is the wallet
+# key the cryptarchia leader service spends to claim slots, and the one
+# operators need to fund from the faucet to participate in consensus.
+# Echoes the 64-char hex, or nothing if keystore missing / role absent.
+get_wallet_leader_pk() {
+    local keystore
+    keystore="$(get_keystore_path)"
+    [[ -f "$keystore" ]] || return 1
+    awk '
+        /^public_keys:[[:space:]]*$/     { in_block = 1; next }
+        in_block && /^[a-zA-Z]/          { exit }
+        in_block && /^[[:space:]]+LeaderFunding:[[:space:]]*[a-f0-9]+/ {
+            print $2; exit
+        }
+    ' "$keystore"
+}
+
+# Return the known_keys list with LeaderFunding first (if present) so status/
+# wallet output leads with the address that matters most for consensus
+# participation. Falls back to plain order when the keystore is absent or
+# LeaderFunding isn't in known_keys.
+get_wallet_keys_prioritized() {
+    local keys leader
+    keys="$(get_wallet_keys 2>/dev/null)" || return 1
+    [[ -z "$keys" ]] && return 1
+    leader="$(get_wallet_leader_pk 2>/dev/null)"
+    if [[ -n "$leader" ]] && echo "$keys" | grep -qx "$leader"; then
+        echo "$leader"
+        echo "$keys" | grep -vx "$leader"
+    else
+        echo "$keys"
+    fi
+}
+
 # Parse known_keys from user_config.yaml
 get_wallet_keys() {
     local config

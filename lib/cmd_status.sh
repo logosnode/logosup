@@ -80,44 +80,59 @@ cmd_status() {
         log_warn "Could not reach network API"
     fi
 
-    # Wallet balance (if keys are available)
-    local keys
-    keys="$(get_wallet_keys 2>/dev/null)"
+    # Wallet balance (if keys are available). LeaderFunding is listed first
+    # and highlighted — that's the key operators need to fund from the faucet
+    # for the node to participate in consensus.
+    local keys leader_pk
+    keys="$(get_wallet_keys_prioritized 2>/dev/null)"
+    leader_pk="$(get_wallet_leader_pk 2>/dev/null)"
 
     if [[ -n "$keys" ]]; then
         source "$LOGOS_NODE_LIB/wallet.sh"
         log_step "Wallet"
         while IFS= read -r key; do
+            [[ -z "$key" ]] && continue
             # Bare call, then read WALLET_HTTP_CODE / WALLET_BODY globals.
             # Don't use $(wallet_get_balance ...) — subshells lose the globals.
             wallet_get_balance "$key"
 
             # Annotate with the semantic role (LeaderFunding, VaucherMaster,
             # Stake, SdpFunding, BlendZk, ...) from keystore.yaml when known.
-            # Unknown / no keystore falls back to a blank annotation.
-            local role role_tag
+            # Highlight the LeaderFunding line so it stands out.
+            local role role_tag key_str is_leader=false
+            [[ "$key" == "$leader_pk" ]] && is_leader=true
             role="$(get_wallet_key_role "$key" 2>/dev/null)"
-            if [[ -n "$role" ]]; then
+            if $is_leader; then
+                role_tag="${BOLD}${CYAN}★ [${role:-LeaderFunding}]${RESET} "
+                key_str="${BOLD}${key}${RESET}"
+            elif [[ -n "$role" ]]; then
                 role_tag="${DIM}[${role}]${RESET} "
+                key_str="${DIM}${key}${RESET}"
             else
                 role_tag=""
+                key_str="${DIM}${key}${RESET}"
             fi
 
             if [[ "$WALLET_HTTP_CODE" == "200" && -n "$WALLET_BODY" ]]; then
                 local balance
                 balance="$(echo "$WALLET_BODY" | sed -E 's/.*"balance":([0-9]+).*/\1/')"
-                log_info "${role_tag}${DIM}${key}${RESET}  balance: ${BOLD}${balance}${RESET}"
+                log_info "${role_tag}${key_str}  balance: ${BOLD}${balance}${RESET}"
             elif [[ "$WALLET_HTTP_CODE" == "200" ]]; then
-                log_info "${role_tag}${DIM}${key}${RESET}  balance: ${BOLD}0${RESET}"
+                log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET}"
             elif echo "$WALLET_BODY" | grep -qiE "not (be )?found"; then
                 # 0.1.x: "not found". 0.2.0: "The requested address could not be
                 # found in the wallet". Both mean the same thing to us: the
                 # wallet is tracking this key but hasn't seen inbound funds.
-                log_info "${role_tag}${DIM}${key}${RESET}  balance: ${BOLD}0${RESET} ${DIM}(no funds received yet)${RESET}"
+                log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET} ${DIM}(no funds received yet)${RESET}"
             else
-                log_info "${role_tag}${DIM}${key}${RESET}  balance: ${DIM}error (HTTP ${WALLET_HTTP_CODE}): $(wallet_squash_body "$WALLET_BODY" 120 "$WALLET_HTTP_CODE")${RESET}"
+                log_info "${role_tag}${key_str}  balance: ${DIM}error (HTTP ${WALLET_HTTP_CODE}): $(wallet_squash_body "$WALLET_BODY" 120 "$WALLET_HTTP_CODE")${RESET}"
             fi
         done <<< "$keys"
+
+        if [[ -n "$leader_pk" ]]; then
+            echo ""
+            log_dim "★ = LeaderFunding — fund this key at ${LOGOS_FAUCET_URL} to participate in consensus"
+        fi
     fi
 
     # Useful links
