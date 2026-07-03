@@ -172,11 +172,16 @@ docker_init_config() {
 
     # Build init-config args. --http-host takes a full SocketAddr (host:port),
     # not just a host; port 8080 matches the container-internal API port that
-    # the compose file forwards.
+    # the compose file forwards. --ibd populates
+    # cryptarchia.network.bootstrap.ibd.peers from the -p peer IDs so the
+    # node actually downloads historical blocks from bootstrap peers instead
+    # of waiting on gossip forever (gossip only carries new blocks; without
+    # IBD a fresh node hovers at height 0 with peers connected).
     local init_args=(
         --output /app/user_config.yaml
         --keystore /app/keystore.yaml
         --http-host 0.0.0.0:8080
+        --ibd
     )
 
     # Bootstrap peers as -p /ip4/.../p2p/... (comma-separated in LOGOS_BOOTSTRAP_PEERS)
@@ -297,7 +302,8 @@ docker_migrate_from_012() {
         --old-config /app/user_config.yaml \
         --new-config /app/user_config.migrated.yaml \
         --keystore /app/keystore.yaml \
-        --http-host 0.0.0.0:8080 2>&1 | while IFS= read -r line; do
+        --http-host 0.0.0.0:8080 \
+        --ibd 2>&1 | while IFS= read -r line; do
             echo -e "  ${DIM}${line}${RESET}"
         done
 
