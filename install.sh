@@ -617,9 +617,9 @@ echo -e "${DIM}─────────────────────�
 success "${BOLD}Logos Node CLI installed successfully!${RESET}"
 echo ""
 info "Next step: set up your node. This will:"
-info "  1. Download the latest Logos Blockchain node"
-info "  2. Build the Docker image with ZK circuits"
-info "  3. Generate your node configuration and wallet keys"
+info "  1. Download the latest Logos Blockchain node release"
+info "  2. Build the Docker image"
+info "  3. Generate your node configuration and wallet keystore"
 info "  4. Show you how to get testnet tokens"
 echo ""
 

@@ -90,9 +90,6 @@ _keys_show() {
     fi
 
     echo ""
-    log_info "Use these keys with the faucet to receive testnet tokens."
-    log_info "Faucet: ${BOLD}${LOGOS_FAUCET_URL}${RESET}"
-    echo ""
     log_dim "Backup your keys: ${BOLD}logosup keys backup${RESET}"
     echo ""
 }

@@ -12,8 +12,13 @@ cmd_status() {
     # Container status
     log_step "Container"
     if docker_is_running; then
-        local container_status
-        container_status="$(docker inspect --format='{{.State.Status}} (up since {{.State.StartedAt}})' "$LOGOS_CONTAINER_NAME" 2>/dev/null)" || true
+        local state started_at container_status
+        state="$(docker inspect --format='{{.State.Status}}' "$LOGOS_CONTAINER_NAME" 2>/dev/null)" || true
+        started_at="$(docker inspect --format='{{.State.StartedAt}}' "$LOGOS_CONTAINER_NAME" 2>/dev/null)" || true
+        # Docker returns nanosecond precision (2026-07-03T16:02:01.609614217Z);
+        # trim to seconds for readability.
+        started_at="$(echo "$started_at" | sed -E 's/\.[0-9]+Z$/Z/')"
+        container_status="${state} (up since ${started_at})"
         log_success "Running: ${container_status}"
 
         local health
@@ -120,10 +125,10 @@ cmd_status() {
             elif [[ "$WALLET_HTTP_CODE" == "200" ]]; then
                 log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET}"
             elif echo "$WALLET_BODY" | grep -qiE "not (be )?found"; then
-                # 0.1.x: "not found". 0.2.0: "The requested address could not be
-                # found in the wallet". Both mean the same thing to us: the
-                # wallet is tracking this key but hasn't seen inbound funds.
-                log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET} ${DIM}(no funds received yet)${RESET}"
+                # 0.1.x: "not found". 0.2.0: "The requested address could not
+                # be found in the wallet". Both mean: wallet is tracking this
+                # key but hasn't seen inbound funds. Render as plain 0.
+                log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET}"
             else
                 log_info "${role_tag}${key_str}  balance: ${DIM}error (HTTP ${WALLET_HTTP_CODE}): $(wallet_squash_body "$WALLET_BODY" 120 "$WALLET_HTTP_CODE")${RESET}"
             fi

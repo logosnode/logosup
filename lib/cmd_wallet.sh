@@ -131,8 +131,8 @@ _wallet_balance() {
         elif echo "$WALLET_BODY" | grep -qiE "not (be )?found"; then
             # 0.1.x: "not found". 0.2.0: "The requested address could not be
             # found in the wallet". Both mean the wallet knows the key but
-            # hasn't seen inbound funds.
-            log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET} ${DIM}(no funds received yet)${RESET}"
+            # hasn't seen inbound funds. Render as plain 0.
+            log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET}"
         else
             local err
             err="$(wallet_squash_body "$WALLET_BODY" 120 "$WALLET_HTTP_CODE")"
