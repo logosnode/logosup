@@ -60,10 +60,13 @@ _monitor_start() {
     local compose_path
     compose_path="$(get_monitoring_compose_path)"
 
-    # Generate compose file if it doesn't exist
-    if [[ ! -f "$compose_path" ]]; then
-        generate_monitoring_compose_file
-    fi
+    # Always regenerate the monitoring compose. Skipping when the file
+    # exists strands operators on stale layouts across CLI updates — the
+    # most recent breakage was a pre-a2db098 file declaring logosnode-net
+    # as `external: true`, which the new CLI (compose-managed) can't
+    # bring up. The compose is fully derived from lib/monitoring.sh; the
+    # regen is cheap and always correct.
+    generate_monitoring_compose_file
 
     # Build and start
     monitoring_build || die "Failed to build monitoring containers"
