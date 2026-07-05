@@ -108,7 +108,6 @@ services:
       context: ${dockerfile_dir}
       args:
         NODE_VERSION: "${LOGOS_NODE_VERSION}"
-        CIRCUITS_VERSION: "${LOGOS_CIRCUITS_VERSION}"
     image: ${LOGOS_DOCKER_IMAGE}:${LOGOS_NODE_VERSION}
     container_name: ${LOGOS_CONTAINER_NAME}
     restart: unless-stopped
@@ -117,11 +116,16 @@ services:
       - "${LOGOS_API_PORT}:8080"
       - "${LOGOS_UDP_PORT}:3000/udp"
     working_dir: /app/data
+    # Config lives OUTSIDE /app/data on purpose — mounting a file inside a
+    # bind-mounted directory gets shadowed by the directory mount, and every
+    # patch to the host file (init-config output, migrate-from-0.1.2 output,
+    # OTLP/log/bind patches) becomes invisible to the running container.
+    # /app/config.yaml sidesteps the overlap; command: overrides the
+    # Dockerfile CMD to pick it up.
     volumes:
-      - ${LOGOS_NODE_DIR}/user_config.yaml:/app/data/user_config.yaml:ro
+      - ${LOGOS_NODE_DIR}/user_config.yaml:/app/config.yaml:ro
       - ${LOGOS_NODE_DIR}/data:/app/data
-    environment:
-      - LOGOS_BLOCKCHAIN_CIRCUITS=/app/circuits
+    command: ["/app/config.yaml"]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/cryptarchia/info"]
       interval: 30s
@@ -150,7 +154,7 @@ docker_build() {
     compose_path="$(get_compose_path)"
 
     log_step "Building Logos Node Docker image..."
-    log_dim "This may take a few minutes on first run (downloading node binary + circuits)"
+    log_dim "This may take a few minutes on first run (downloading node binary)"
 
     $DOCKER_COMPOSE -f "$compose_path" build 2>&1 | while IFS= read -r line; do
         echo -e "  ${DIM}${line}${RESET}"
@@ -163,22 +167,45 @@ docker_build() {
     log_success "Docker image built successfully"
 }
 
-# Run the node init command inside the container to generate user_config.yaml
+# Run the node init-config command inside the container to generate
+# user_config.yaml + keystore.yaml. Renamed from `init` in 0.2.0.
 docker_init_config() {
     local compose_path
     compose_path="$(get_compose_path)"
     local config_path
     config_path="$(get_user_config_path)"
+    local keystore_path
+    keystore_path="$(get_keystore_path)"
 
-    # Build peer args
-    local peer_args=()
+    # Build init-config args. --http-host takes a full SocketAddr (host:port),
+    # not just a host; port 8080 matches the container-internal API port that
+    # the compose file forwards. --ibd populates
+    # cryptarchia.network.bootstrap.ibd.peers from the -p peer IDs so the
+    # node actually downloads historical blocks from bootstrap peers instead
+    # of waiting on gossip forever (gossip only carries new blocks; without
+    # IBD a fresh node hovers at height 0 with peers connected).
+    local init_args=(
+        --output /app/user_config.yaml
+        --keystore /app/keystore.yaml
+        --http-host 0.0.0.0:8080
+        --ibd
+    )
+
+    # Bootstrap peers as -p /ip4/.../p2p/... (comma-separated in LOGOS_BOOTSTRAP_PEERS)
     IFS=',' read -ra peers <<< "$LOGOS_BOOTSTRAP_PEERS"
     for peer in "${peers[@]}"; do
-        peer_args+=("-p" "$peer")
+        init_args+=("-p" "$peer")
     done
 
+    # Optional public-IP hint: disables NAT traversal and advertises the
+    # operator's known external address. Format: /ip4/<ip>/udp/<port>/quic-v1
+    if [[ -n "${LOGOS_EXTERNAL_IP:-}" ]]; then
+        init_args+=("--external-address" "/ip4/${LOGOS_EXTERNAL_IP}/udp/${LOGOS_UDP_PORT}/quic-v1")
+        log_dim "Advertising external address: /ip4/${LOGOS_EXTERNAL_IP}/udp/${LOGOS_UDP_PORT}/quic-v1"
+    fi
+
     log_step "Generating node configuration..."
-    log_dim "Running logos-blockchain-node init with bootstrap peers"
+    log_dim "Running logos-blockchain-node init-config with bootstrap peers"
 
     # Run init as the host user so it can write to the mounted volume
     local host_uid
@@ -189,42 +216,30 @@ docker_init_config() {
     # Ensure data directory exists
     mkdir -p "${LOGOS_NODE_DIR}/data"
 
-    # Run init in a temporary container, writing config to the mounted volume
+    # Run init-config in a temporary container, writing outputs to the mounted volume
     $DOCKER_CMD run --rm \
         --user "${host_uid}:${host_gid}" \
         -v "${LOGOS_NODE_DIR}:/app" \
         -w /app \
         "${LOGOS_DOCKER_IMAGE}:${LOGOS_NODE_VERSION}" \
-        init "${peer_args[@]}" 2>&1 | while IFS= read -r line; do
+        init-config "${init_args[@]}" 2>&1 | while IFS= read -r line; do
             echo -e "  ${DIM}${line}${RESET}"
         done
 
-    # Fallback: try with explicit --output flag
-    if [[ ! -f "$config_path" ]]; then
-        $DOCKER_CMD run --rm \
-            --user "${host_uid}:${host_gid}" \
-            -v "${LOGOS_NODE_DIR}:/app/config" \
-            -w /app \
-            "${LOGOS_DOCKER_IMAGE}:${LOGOS_NODE_VERSION}" \
-            init "${peer_args[@]}" \
-            --output /app/config/user_config.yaml 2>&1 | while IFS= read -r line; do
-                echo -e "  ${DIM}${line}${RESET}"
-            done
-    fi
-
     if [[ -f "$config_path" ]]; then
         chmod 600 "$config_path"
-
-        # Patch HTTP backend to bind to 0.0.0.0 so Docker port mapping works
-        # (default is 127.0.0.1, which blocks access from outside the container)
-        if grep -q '127\.0\.0\.1' "$config_path"; then
-            if [[ "$(uname -s)" == "Darwin" ]]; then
-                sed -i '' 's/127\.0\.0\.1/0.0.0.0/g' "$config_path"
-            else
-                sed -i 's/127\.0\.0\.1/0.0.0.0/g' "$config_path"
-            fi
-            log_dim "Patched HTTP backend to bind 0.0.0.0 (accessible from local network)"
+        if [[ -f "$keystore_path" ]]; then
+            chmod 600 "$keystore_path"
+            log_dim "Keystore written to $keystore_path (chmod 600)"
+        else
+            log_warn "Expected keystore.yaml alongside user_config.yaml but did not find it"
         fi
+
+        # Safety net for the API bind — --http-host on init-config should
+        # already put us on 0.0.0.0, but re-assert idempotently in case a
+        # flag change or hand-edit slips 127.0.0.1 back in (silently
+        # unreachable via the port map).
+        patch_user_config_for_http_bind "$config_path"
 
         # Enable OTLP metrics push so the monitoring stack can scrape native
         # node metrics (mempool, consensus, blend, KMS, storage, etc.) via the
@@ -243,9 +258,119 @@ docker_init_config() {
         return 0
     else
         log_error "Failed to generate node configuration"
-        log_info "You may need to generate it manually. See: logos-node --help"
+        log_info "You may need to generate it manually. See: logos-blockchain-node init-config --help"
         return 1
     fi
+}
+
+# Run migrate-from-0.1.2 inside a temporary 0.2.0 container. Consumes the
+# operator's existing user_config.yaml (with 0.1.2 shape and inline secret
+# keys), produces a new user_config.yaml (0.2.0 shape) plus keystore.yaml.
+# Preserves wallet identities across the genesis reset — funds do not carry
+# over, but the operator's public keys stay stable.
+#
+# Idempotent guardrail: refuses to overwrite an already-migrated config
+# (detects 0.2.0 shape via the presence of the `wallet:` top-level key).
+docker_migrate_from_012() {
+    local config_path
+    config_path="$(get_user_config_path)"
+    local keystore_path
+    keystore_path="$(get_keystore_path)"
+
+    [[ -f "$config_path" ]] || {
+        log_error "No user_config.yaml found — nothing to migrate"
+        return 1
+    }
+
+    # Detect if the file is already in 0.2.0 shape. Both 0.1.2 and 0.2.0 have
+    # top-level `wallet:` and `kms:` sections; the discriminator is the presence
+    # of `tip_poll:` under `cryptarchia.network.sync` — a stable 0.2.0-unique
+    # marker. Re-running migrate-from-0.1.2 on an already-migrated config would
+    # silently rotate the leader funding key, so this guard is load-bearing.
+    if grep -qE '^[[:space:]]+tip_poll:[[:space:]]*$' "$config_path"; then
+        log_dim "Config already in 0.2.0 shape — skipping migrate-from-0.1.2"
+        return 0
+    fi
+
+    local host_uid
+    host_uid="$(id -u)"
+    local host_gid
+    host_gid="$(id -g)"
+
+    # migrate-from-0.1.2 does NOT carry initial_peers over from the old
+    # config — the output always has network.backend.initial_peers: [] and
+    # cryptarchia.network.bootstrap.ibd.peers: [] unless we pass -p peers
+    # here (the release notes' quick-start relies on this too). Without
+    # this, migrated nodes come up with zero fleet contacts and only find
+    # peers through leftover DHT cache, which almost never surfaces the
+    # 0.2.0 fleet. Reuse the same LOGOS_BOOTSTRAP_PEERS the fresh-install
+    # path uses.
+    local migrate_args=(
+        migrate-from-0.1.2
+        --old-config /app/user_config.yaml
+        --new-config /app/user_config.migrated.yaml
+        --keystore /app/keystore.yaml
+        --http-host 0.0.0.0:8080
+        --ibd
+    )
+    local _p
+    IFS=',' read -ra _peers <<< "$LOGOS_BOOTSTRAP_PEERS"
+    for _p in "${_peers[@]}"; do
+        migrate_args+=("-p" "$_p")
+    done
+    if [[ -n "${LOGOS_EXTERNAL_IP:-}" ]]; then
+        migrate_args+=("--external-address" "/ip4/${LOGOS_EXTERNAL_IP}/udp/${LOGOS_UDP_PORT}/quic-v1")
+    fi
+
+    log_step "Migrating 0.1.2 config to 0.2.0 (preserving wallet keys)..."
+
+    # Old config passed in; new config written to a sibling path we rename after.
+    $DOCKER_CMD run --rm \
+        --user "${host_uid}:${host_gid}" \
+        -v "${LOGOS_NODE_DIR}:/app" \
+        -w /app \
+        "${LOGOS_DOCKER_IMAGE}:${LOGOS_NODE_VERSION}" \
+        "${migrate_args[@]}" 2>&1 | while IFS= read -r line; do
+            echo -e "  ${DIM}${line}${RESET}"
+        done
+
+    if [[ ! -f "${LOGOS_NODE_DIR}/user_config.migrated.yaml" ]]; then
+        log_error "migrate-from-0.1.2 did not produce a new config"
+        return 1
+    fi
+
+    mv "${LOGOS_NODE_DIR}/user_config.migrated.yaml" "$config_path"
+    chmod 600 "$config_path"
+    [[ -f "$keystore_path" ]] && chmod 600 "$keystore_path"
+
+    # Re-apply our compose-friendly tracing + bind patches (all idempotent).
+    # patch_user_config_for_http_bind is a safety net: --http-host on
+    # migrate-from-0.1.2 covers new runs, but any config that predates that
+    # fix (or was hand-edited) is silently unreachable via the port map.
+    patch_user_config_for_http_bind "$config_path"
+    patch_user_config_for_otlp "$config_path"
+    patch_user_config_for_log_files "$config_path"
+
+    log_success "Migrated to 0.2.0 config shape; wallet keys preserved in $keystore_path"
+    return 0
+}
+
+# Rewrite api.backend.listen_address so the node binds 0.0.0.0 inside the
+# container. Docker's port map forwards host:8080 to container_ip:8080 — if
+# the node listens on 127.0.0.1:8080 inside the container, the forward can't
+# reach it and every host-side connection is reset by peer.
+#
+# init-config gets this right via --http-host, but migrate-from-0.1.2 in
+# older code paths didn't pass it, so 0.1.2 configs that carried
+# 127.0.0.1 through would land here silently broken. Idempotent: no-op if
+# the address is already 0.0.0.0:*.
+patch_user_config_for_http_bind() {
+    local config_path="$1"
+    [[ -f "$config_path" ]] || return 0
+    grep -qE '^[[:space:]]+listen_address:[[:space:]]*127\.0\.0\.1:' "$config_path" || return 0
+
+    sed_inplace 's|^\([[:space:]]\+\)listen_address:[[:space:]]*127\.0\.0\.1:|\1listen_address: 0.0.0.0:|' "$config_path"
+    log_dim "Patched api.backend.listen_address 127.0.0.1 → 0.0.0.0 (for Docker port map)"
 }
 
 # Enable OTLP metrics push in user_config.yaml so logos-otel can collect

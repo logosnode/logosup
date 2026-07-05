@@ -49,12 +49,30 @@ _perform_migration() {
         log_warn "${BOLD}This will wipe local node data${RESET}"
     fi
 
+    # Detect whether the current on-disk config predates 0.2.0 — if so, we
+    # can preserve wallet identities across the genesis reset by running
+    # `migrate-from-0.1.2` before wiping data. The stable discriminator is
+    # `tip_poll:` under cryptarchia.network.sync (0.2.0-only marker); its
+    # absence means the config is 0.1.x shape. Both 0.1.2 and 0.2.0 have
+    # top-level `wallet:` and `known_keys:` under it, so those don't work
+    # as version markers. Funds still don't carry over — only identities.
+    local preserve_keys=false
+    local config_path
+    config_path="$(get_user_config_path)"
+    if [[ -f "$config_path" ]] && ! grep -qE '^[[:space:]]+tip_poll:[[:space:]]*$' "$config_path"; then
+        preserve_keys=true
+    fi
+
     log_info "Steps that will run:"
     log_info "  1. Stop node (and monitoring, if running)"
     log_info "  2. Back up ${BOLD}user_config.yaml${RESET} → ${BOLD}user_config.yaml.pre-migration-<timestamp>${RESET}"
     log_info "  3. Delete ${BOLD}${LOGOS_NODE_DIR}/data/${RESET} (chain DB + logs)"
     log_info "  4. Rebuild Docker image for the current node version"
-    log_info "  5. Regenerate fresh ${BOLD}user_config.yaml${RESET} (new wallet keys)"
+    if [[ "$preserve_keys" == "true" ]]; then
+        log_info "  5. Migrate 0.1.2 → 0.2.0 config ${BOLD}(preserves wallet keys)${RESET}"
+    else
+        log_info "  5. Regenerate fresh ${BOLD}user_config.yaml${RESET} (new wallet keys)"
+    fi
     log_info "  6. Restart node (and monitoring, if it was running)"
     echo ""
     log_dim "After migration you must request faucet funds again — the new chain starts from zero."
@@ -83,14 +101,18 @@ _perform_migration() {
     # cmd_start auto-restarts monitoring at the end if the compose file exists.
 
     # ── Step 2: back up user_config.yaml ──────────────────────────────
-    local config_path
-    config_path="$(get_user_config_path)"
+    # (config_path already resolved above during preserve_keys detection)
     if [[ -f "$config_path" ]]; then
         local backup_path="${config_path}.pre-migration-$(date +%Y%m%d-%H%M%S)"
         cp "$config_path" "$backup_path"
         chmod 600 "$backup_path"
         log_success "Backed up config to ${BOLD}${backup_path}${RESET}"
-        rm -f "$config_path"
+        # In the fresh-keys path we drop the old config so init-config generates
+        # cleanly. In the preserve-keys path we keep it in place because
+        # migrate-from-0.1.2 needs to read it.
+        if [[ "$preserve_keys" != "true" ]]; then
+            rm -f "$config_path"
+        fi
     fi
 
     # ── Step 3: wipe data dir ─────────────────────────────────────────
@@ -119,7 +141,11 @@ _perform_migration() {
     fi
 
     # ── Step 5: regenerate config ─────────────────────────────────────
-    docker_init_config || die "Failed to regenerate node configuration"
+    if [[ "$preserve_keys" == "true" ]]; then
+        docker_migrate_from_012 || die "Failed to migrate 0.1.2 config to 0.2.0"
+    else
+        docker_init_config || die "Failed to regenerate node configuration"
+    fi
 
     # ── Show new keys + faucet ────────────────────────────────────────
     echo ""

@@ -66,7 +66,6 @@ _yml_get() {
 _set_defaults() {
     : "${LOGOS_NETWORK:=testnet}"
     : "${LOGOS_NODE_VERSION:=latest}"
-    : "${LOGOS_CIRCUITS_VERSION:=latest}"
     : "${LOGOS_API_PORT:=8080}"
     : "${LOGOS_UDP_PORT:=3000}"
     : "${LOGOS_FAUCET_URL:=https://testnet.blockchain.logos.co/web/faucet/}"
@@ -82,11 +81,15 @@ _set_defaults() {
     : "${LOGOS_GRAFANA_PORT:=3001}"
     : "${LOGOS_GRAFANA_AUTH:=false}"
     : "${LOGOS_GRAFANA_PASSWORD:=logos}"
+    # Optional: public IPv4 for nodes with a known static IP. When set, we pass
+    # --external-address /ip4/<ip>/udp/<port>/quic-v1 to init-config so the
+    # node advertises this address to peers and disables NAT traversal.
+    : "${LOGOS_EXTERNAL_IP:=}"
 
-    export LOGOS_NETWORK LOGOS_NODE_VERSION LOGOS_CIRCUITS_VERSION LOGOS_API_PORT LOGOS_UDP_PORT
+    export LOGOS_NETWORK LOGOS_NODE_VERSION LOGOS_API_PORT LOGOS_UDP_PORT
     export LOGOS_FAUCET_URL LOGOS_DASHBOARD_URL LOGOS_DOCKER_IMAGE LOGOS_CONTAINER_NAME
     export LOGOS_NODE_REPO LOGOS_CLI_REPO LOGOS_BOOTSTRAP_PEERS LOGOS_GRAFANA_PORT
-    export LOGOS_GRAFANA_AUTH LOGOS_GRAFANA_PASSWORD
+    export LOGOS_GRAFANA_AUTH LOGOS_GRAFANA_PASSWORD LOGOS_EXTERNAL_IP
 }
 
 # ── Init & Load ───────────────────────────────────────────────────────
@@ -102,9 +105,12 @@ init_config() {
 # Override them here if needed.
 
 LOGOS_NODE_VERSION=latest
-LOGOS_CIRCUITS_VERSION=latest
 LOGOS_DOCKER_IMAGE=logos-node
 LOGOS_CONTAINER_NAME=logos-node
+
+# Optional: set this to your public IPv4 if the node has a known static IP.
+# When set, we advertise this address to peers and skip NAT traversal.
+# LOGOS_EXTERNAL_IP=203.0.113.42
 SETTINGS
         chmod 600 "$LOGOS_SETTINGS_FILE"
     fi
@@ -233,8 +239,71 @@ get_user_config_path() {
     echo "$LOGOS_NODE_DIR/user_config.yaml"
 }
 
+# Keystore file — separate from user_config.yaml since 0.2.0. Written by
+# init-config alongside user_config.yaml, holds the operator's secret keys.
+# Must stay chmod 600 like user_config.yaml.
+get_keystore_path() {
+    echo "$LOGOS_NODE_DIR/keystore.yaml"
+}
+
 get_compose_path() {
     echo "$LOGOS_NODE_DIR/docker-compose.yml"
+}
+
+# Look up the semantic role of a wallet public key from keystore.yaml.
+# keystore.yaml has a `public_keys:` block mapping role names
+# (LeaderFunding, VaucherMaster, Stake, SdpFunding, BlendZk, BlendSigning,
+# NetworkSwarm, ...) to their hex public keys. Given a hex key, echoes the
+# matching role, or nothing if unknown / keystore missing.
+get_wallet_key_role() {
+    local pk="$1"
+    [[ -z "$pk" ]] && return 1
+    local keystore
+    keystore="$(get_keystore_path)"
+    [[ -f "$keystore" ]] || return 1
+
+    awk -v needle="$pk" '
+        /^public_keys:[[:space:]]*$/ { in_block = 1; next }
+        in_block && /^[a-zA-Z]/       { in_block = 0 }
+        in_block && /^[[:space:]]+[A-Za-z][A-Za-z0-9]*:[[:space:]]*[a-f0-9]+/ {
+            role = $1; sub(/:$/, "", role)
+            if ($2 == needle) { print role; exit }
+        }
+    ' "$keystore"
+}
+
+# Read the LeaderFunding public key from keystore.yaml — this is the wallet
+# key the cryptarchia leader service spends to claim slots, and the one
+# operators need to fund from the faucet to participate in consensus.
+# Echoes the 64-char hex, or nothing if keystore missing / role absent.
+get_wallet_leader_pk() {
+    local keystore
+    keystore="$(get_keystore_path)"
+    [[ -f "$keystore" ]] || return 1
+    awk '
+        /^public_keys:[[:space:]]*$/     { in_block = 1; next }
+        in_block && /^[a-zA-Z]/          { exit }
+        in_block && /^[[:space:]]+LeaderFunding:[[:space:]]*[a-f0-9]+/ {
+            print $2; exit
+        }
+    ' "$keystore"
+}
+
+# Return the known_keys list with LeaderFunding first (if present) so status/
+# wallet output leads with the address that matters most for consensus
+# participation. Falls back to plain order when the keystore is absent or
+# LeaderFunding isn't in known_keys.
+get_wallet_keys_prioritized() {
+    local keys leader
+    keys="$(get_wallet_keys 2>/dev/null)" || return 1
+    [[ -z "$keys" ]] && return 1
+    leader="$(get_wallet_leader_pk 2>/dev/null)"
+    if [[ -n "$leader" ]] && echo "$keys" | grep -qx "$leader"; then
+        echo "$leader"
+        echo "$keys" | grep -vx "$leader"
+    else
+        echo "$keys"
+    fi
 }
 
 # Parse known_keys from user_config.yaml

@@ -62,6 +62,27 @@ host_load_5m = Gauge("logos_host_load_5m", "Host 5-minute load average")
 host_load_15m = Gauge("logos_host_load_15m", "Host 15-minute load average")
 
 
+# Passthrough constructor for the node's YAML tags (!Env, !Otlp, !Zk,
+# !Ed25519, !Rolling, !MaxFiles ...). Without it, safe_load blows up on the
+# first unknown tag and we fall through to a regex — which works but is
+# fragile if the file gets reshaped. Same trick keys_io.py uses.
+class _Tagged:
+    __slots__ = ("tag", "value")
+    def __init__(self, tag, value):
+        self.tag, self.value = tag, value
+
+
+def _tag_constructor(loader, tag_suffix, node):
+    if isinstance(node, yaml.ScalarNode):
+        return _Tagged(tag_suffix, loader.construct_scalar(node))
+    if isinstance(node, yaml.MappingNode):
+        return _Tagged(tag_suffix, loader.construct_mapping(node, deep=True))
+    return _Tagged(tag_suffix, loader.construct_sequence(node, deep=True))
+
+
+yaml.SafeLoader.add_multi_constructor("!", _tag_constructor)
+
+
 def parse_wallet_keys(config_path):
     """Parse wallet.known_keys from user_config.yaml.
 
@@ -104,13 +125,22 @@ def poll_node_api():
 
         node_up.set(1)
 
-        mode = data.get("mode", "Unknown")
+        # 0.2.0: mode is an enum object like {"Started": "Bootstrapping"}
+        # 0.1.x: mode was a scalar string like "Bootstrapping"
+        mode_field = data.get("mode", "Unknown")
+        if isinstance(mode_field, dict) and mode_field:
+            mode = next(iter(mode_field.values()), "Unknown")
+        else:
+            mode = mode_field
         # Reset all mode labels, set the active one
         for m in ("Online", "Bootstrapping"):
             consensus_mode.labels(mode=m).set(1 if m == mode else 0)
 
-        slot = data.get("slot", 0)
-        height = data.get("height", 0)
+        # 0.2.0: slot/height/tip/lib live under "cryptarchia_info"
+        # 0.1.x: they were at the top level
+        info = data.get("cryptarchia_info", data)
+        slot = info.get("slot", 0)
+        height = info.get("height", 0)
         node_slot.set(slot)
         node_height.set(height)
 

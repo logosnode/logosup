@@ -12,8 +12,13 @@ cmd_status() {
     # Container status
     log_step "Container"
     if docker_is_running; then
-        local container_status
-        container_status="$(docker inspect --format='{{.State.Status}} (up since {{.State.StartedAt}})' "$LOGOS_CONTAINER_NAME" 2>/dev/null)" || true
+        local state started_at container_status
+        state="$(docker inspect --format='{{.State.Status}}' "$LOGOS_CONTAINER_NAME" 2>/dev/null)" || true
+        started_at="$(docker inspect --format='{{.State.StartedAt}}' "$LOGOS_CONTAINER_NAME" 2>/dev/null)" || true
+        # Docker returns nanosecond precision (2026-07-03T16:02:01.609614217Z);
+        # trim to seconds for readability.
+        started_at="$(echo "$started_at" | sed -E 's/\.[0-9]+Z$/Z/')"
+        container_status="${state} (up since ${started_at})"
         log_success "Running: ${container_status}"
 
         local health
@@ -38,13 +43,21 @@ cmd_status() {
 
     if [[ -n "$consensus" ]]; then
         local mode slot height lib tip
-        mode="$(echo "$consensus" | sed -E 's/.*"mode":"([^"]+)".*/\1/')"
+        # 0.2.0 wraps the mode in an enum object: "mode":{"Started":"Bootstrapping"}.
+        # 0.1.x returned a scalar: "mode":"Bootstrapping". Try the wrapped shape
+        # first (extracts the inner variant), fall back to the scalar. On no
+        # match the substitution leaves the whole body — detect and blank out.
+        mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*\{"[^"]+":[[:space:]]*"([^"]+)"\}.*/\1/p')"
+        if [[ -z "$mode" ]]; then
+            mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*"([^"]+)".*/\1/p')"
+        fi
         slot="$(echo "$consensus" | sed -E 's/.*"slot":([0-9]+).*/\1/')"
         height="$(echo "$consensus" | sed -E 's/.*"height":([0-9]+).*/\1/')"
 
         case "$mode" in
             Online)        log_success "Mode: ${GREEN}${mode}${RESET}" ;;
             Bootstrapping) log_info "Mode: ${YELLOW}${mode}${RESET} (syncing...)" ;;
+            "")            log_info "Mode: ${DIM}(unknown)${RESET}" ;;
             *)             log_info "Mode: ${mode}" ;;
         esac
 
@@ -72,30 +85,59 @@ cmd_status() {
         log_warn "Could not reach network API"
     fi
 
-    # Wallet balance (if keys are available)
-    local keys
-    keys="$(get_wallet_keys 2>/dev/null)"
+    # Wallet balance (if keys are available). LeaderFunding is listed first
+    # and highlighted — that's the key operators need to fund from the faucet
+    # for the node to participate in consensus.
+    local keys leader_pk
+    keys="$(get_wallet_keys_prioritized 2>/dev/null)"
+    leader_pk="$(get_wallet_leader_pk 2>/dev/null)"
 
     if [[ -n "$keys" ]]; then
         source "$LOGOS_NODE_LIB/wallet.sh"
         log_step "Wallet"
         while IFS= read -r key; do
+            [[ -z "$key" ]] && continue
             # Bare call, then read WALLET_HTTP_CODE / WALLET_BODY globals.
             # Don't use $(wallet_get_balance ...) — subshells lose the globals.
             wallet_get_balance "$key"
 
+            # Annotate with the semantic role (LeaderFunding, VaucherMaster,
+            # Stake, SdpFunding, BlendZk, ...) from keystore.yaml when known.
+            # Highlight the LeaderFunding line so it stands out.
+            local role role_tag key_str is_leader=false
+            [[ "$key" == "$leader_pk" ]] && is_leader=true
+            role="$(get_wallet_key_role "$key" 2>/dev/null)"
+            if $is_leader; then
+                role_tag="${BOLD}${CYAN}★ [${role:-LeaderFunding}]${RESET} "
+                key_str="${BOLD}${key}${RESET}"
+            elif [[ -n "$role" ]]; then
+                role_tag="${DIM}[${role}]${RESET} "
+                key_str="${DIM}${key}${RESET}"
+            else
+                role_tag=""
+                key_str="${DIM}${key}${RESET}"
+            fi
+
             if [[ "$WALLET_HTTP_CODE" == "200" && -n "$WALLET_BODY" ]]; then
                 local balance
                 balance="$(echo "$WALLET_BODY" | sed -E 's/.*"balance":([0-9]+).*/\1/')"
-                log_info "${DIM}${key}${RESET}  balance: ${BOLD}${balance}${RESET}"
+                log_info "${role_tag}${key_str}  balance: ${BOLD}${balance}${RESET}"
             elif [[ "$WALLET_HTTP_CODE" == "200" ]]; then
-                log_info "${DIM}${key}${RESET}  balance: ${BOLD}0${RESET}"
-            elif echo "$WALLET_BODY" | grep -qi "not found"; then
-                log_info "${DIM}${key}${RESET}  balance: ${BOLD}0${RESET} ${DIM}(no funds received yet)${RESET}"
+                log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET}"
+            elif echo "$WALLET_BODY" | grep -qiE "not (be )?found"; then
+                # 0.1.x: "not found". 0.2.0: "The requested address could not
+                # be found in the wallet". Both mean: wallet is tracking this
+                # key but hasn't seen inbound funds. Render as plain 0.
+                log_info "${role_tag}${key_str}  balance: ${BOLD}0${RESET}"
             else
-                log_info "${DIM}${key}${RESET}  balance: ${DIM}error (HTTP ${WALLET_HTTP_CODE}): $(wallet_squash_body "$WALLET_BODY" 120 "$WALLET_HTTP_CODE")${RESET}"
+                log_info "${role_tag}${key_str}  balance: ${DIM}error (HTTP ${WALLET_HTTP_CODE}): $(wallet_squash_body "$WALLET_BODY" 120 "$WALLET_HTTP_CODE")${RESET}"
             fi
         done <<< "$keys"
+
+        if [[ -n "$leader_pk" ]]; then
+            echo ""
+            log_dim "★ = LeaderFunding — fund this key to participate in consensus"
+        fi
     fi
 
     # Useful links
@@ -110,5 +152,21 @@ cmd_status() {
         log_info "Grafana:   ${BOLD}https://${grafana_host}:${LOGOS_GRAFANA_PORT}${RESET}"
         log_dim "Self-signed cert — accept the browser warning on first visit"
     fi
+
+    # ── Version footer ──────────────────────────────────────────────────
+    # Subtle line at the very end showing what's actually installed. Answers
+    # "what version am I on" without an extra command. logosup version comes
+    # from the CLI's VERSION file; node version is the pinned image tag
+    # (falls back to the on-disk container's image if pin is missing);
+    # docker-compose is best-effort since some environments hide it.
+    local logosup_ver node_ver compose_ver
+    if [[ -f "$LOGOS_NODE_DIR/cli/VERSION" ]]; then
+        logosup_ver="$(head -1 "$LOGOS_NODE_DIR/cli/VERSION" 2>/dev/null)"
+    fi
+    logosup_ver="${logosup_ver:-unknown}"
+    node_ver="${LOGOS_NODE_VERSION:-unknown}"
+    compose_ver="$($DOCKER_COMPOSE version --short 2>/dev/null || echo unknown)"
+    echo ""
+    log_dim "logosup ${logosup_ver} · node ${node_ver} · compose ${compose_ver}"
     echo ""
 }
