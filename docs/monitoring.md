@@ -24,7 +24,12 @@ Your browser will show a security warning on first visit — accept it to procee
 Two are provisioned:
 
 - **Logos Node** (Overview) — at-a-glance status: consensus mode, slot/height, peers, container health, wallet balances.
+
+  ![Grafana overview dashboard](images/grafana-overview.jpeg)
+
 - **Logos Node — Deep Dive** — native node metrics organized by service: consensus (block apply latency, proposals, fork count, finalized height), mempool (pending/added/removed), chainsync (request latency, downloads), orphans, blend (peers, message rates), KMS (sign requests/successes/failures), SDP (declarations, withdrawals), HTTP API and storage latency.
+
+  ![Grafana deep-dive dashboard](images/grafana-deepdive.jpeg)
 
 Use the "Deep Dive" link in the top-right of the Overview dashboard to switch between them. No login required by default — enable with `logosup monitor auth on`.
 

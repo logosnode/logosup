@@ -4,6 +4,8 @@ A CLI tool for installing, running, and managing a [Logos Blockchain](https://lo
 
 > Previously `logos-node`. The CLI command was renamed to `logosup` in v0.4.0; the old `logos-node` and `logosnode` commands still work as aliases.
 
+![logosup command overview](docs/images/logosup-help.jpeg)
+
 ## Quick start
 
 ```sh
@@ -12,6 +14,10 @@ logosup install
 ```
 
 The installer checks prerequisites, fetches the latest release, builds a Docker image, generates configuration and wallet keys, and optionally enables monitoring and security hardening.
+
+Once your node is running, `logosup status` shows consensus mode, sync progress, peers, and per-role wallet balances — with the LeaderFunding key (the one to fund at the faucet) called out with a star:
+
+![logosup status output](docs/images/logosup-status.jpeg)
 
 ## Requirements
 
