@@ -34,7 +34,7 @@ Missing prerequisites are auto-installed via the system package manager (apt, dn
 | `logosup install` | Full setup — download, build, configure, generate keys |
 | `logosup start` / `stop` | Start or stop the node (+ monitoring) |
 | `logosup status` | Consensus state, peers, wallet balances |
-| `logosup logs` | Tail node logs (`-f`, `--tail=N`, `--since=1h`) |
+| `logosup logs` | Tail node logs (`-n N`, `--no-follow`, `--all` includes monitoring) |
 | `logosup update` | Update node and/or CLI (`update node\|cli\|all`, `-b BRANCH`) |
 | `logosup wallet` | Send transfers, check balance, look up transactions |
 | `logosup keys` | Show, backup, or restore wallet keys |

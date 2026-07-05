@@ -140,6 +140,9 @@ cmd_status() {
         fi
     fi
 
+    # ── Diagnostics: scan the last minute of node logs for known-bad patterns
+    _scan_recent_node_logs
+
     # Useful links
     echo ""
     print_separator
@@ -169,4 +172,80 @@ cmd_status() {
     echo ""
     log_dim "logosup ${logosup_ver} · node ${node_ver} · compose ${compose_ver}"
     echo ""
+}
+
+# Scan the last minute of node container logs and surface categorized
+# warnings. Emits nothing when the log window is clean — so healthy nodes
+# don't grow a noisy status output. Silent when the container isn't
+# running (Container section above already reported that).
+#
+# Each pattern is chosen because it silently blocks progress in a way
+# operators can't tell from height/peer counts alone:
+#   - protocol mismatch: connected peers on the wrong network version can't
+#     serve chainsync. This wasted hours on the Lisbon Pi.
+#   - IBD failure: the binary graceful-shutdowns when bootstrap peers can't
+#     be reached; docker restarts it, and it happens again → crash loop.
+#   - NTP failure: clock drift breaks consensus timing.
+#   - Network unreachable: outbound blocked (usually UFW/Docker iptables).
+#   - Gateway detection failure: libp2p NAT traversal can't work.
+_scan_recent_node_logs() {
+    docker_is_running || return 0
+
+    local window
+    # --since=60s covers active state without dragging in old crash-loop
+    # noise from an install/reset that already resolved itself.
+    window="$($DOCKER_CMD logs --since 60s "$LOGOS_CONTAINER_NAME" 2>&1)" || return 0
+    [[ -z "$window" ]] && return 0
+
+    local proto_mismatch ibd_failed ntp_failed net_unreach no_gateway
+    proto_mismatch="$(echo "$window" | grep -cE 'does not support /logos-blockchain-[a-z]+-[0-9]+\.[0-9]+\.[0-9]+/chainsync' 2>/dev/null || echo 0)"
+    ibd_failed="$(echo "$window"     | grep -cE 'Initial Block Download failed: AllPeersFailed'                          2>/dev/null || echo 0)"
+    ntp_failed="$(echo "$window"     | grep -cE 'NTP sync failed'                                                        2>/dev/null || echo 0)"
+    net_unreach="$(echo "$window"    | grep -cE 'Network is unreachable|Temporary failure in name resolution'            2>/dev/null || echo 0)"
+    no_gateway="$(echo "$window"     | grep -cE 'Failed to detect gateway|Failed to get default gateway'                 2>/dev/null || echo 0)"
+
+    # Nothing to say → don't print the section header at all.
+    if (( proto_mismatch == 0 && ibd_failed == 0 && ntp_failed == 0 && net_unreach == 0 && no_gateway == 0 )); then
+        return 0
+    fi
+
+    log_step "Diagnostics"
+    log_dim "(from the last 60s of node logs)"
+
+    # Extract the specific chainsync protocol the peers are refusing so we
+    # can quote it back to the operator. Only meaningful if we found any.
+    if (( proto_mismatch > 0 )); then
+        local proto
+        proto="$(echo "$window" | grep -oE '/logos-blockchain-[a-z]+-[0-9]+\.[0-9]+\.[0-9]+/chainsync/[0-9]+\.[0-9]+\.[0-9]+' | sort -u | head -1)"
+        log_warn "Protocol mismatch — ${proto_mismatch} peers don't speak this node's chainsync"
+        log_dim "  Peers can gossip at the libp2p layer but can't serve blocks. Height won't advance."
+        log_dim "  Our node advertises: ${BOLD}${proto}${RESET}${DIM}"
+        log_dim "  Fleet may be on a different network version — cross-check network.yml"
+        log_dim "  against https://github.com/logos-blockchain/logos-blockchain/releases/latest"
+    fi
+
+    if (( ibd_failed > 0 )); then
+        log_warn "IBD failed ${ibd_failed}× — node graceful-shutdowns when bootstrap peers unreachable"
+        log_dim "  Docker's restart policy is re-launching it in a loop. If this persists past 2-3"
+        log_dim "  minutes, verify UDP connectivity to the bootstrap peers listed in network.yml:"
+        log_dim "    for p in 3000 3001 3002 50001; do timeout 3 bash -c \"echo x > /dev/udp/65.109.51.37/\$p\" 2>&1 && echo \"\$p OK\"; done"
+    fi
+
+    if (( net_unreach > 0 )); then
+        log_warn "Container reported network-unreachable ${net_unreach}× in last 60s"
+        log_dim "  Usually a transient during boot before Docker's bridge finishes attaching."
+        log_dim "  If it persists, check: ${BOLD}sudo systemctl restart docker${RESET}${DIM} then retry."
+    fi
+
+    if (( ntp_failed > 0 )); then
+        log_warn "NTP sync failed ${ntp_failed}× — clock drift will break consensus timing"
+        log_dim "  Container needs outbound DNS + UDP/123 to pool.ntp.org."
+        log_dim "  Check: ${BOLD}docker exec ${LOGOS_CONTAINER_NAME} getent hosts pool.ntp.org${RESET}"
+    fi
+
+    if (( no_gateway > 0 )); then
+        log_warn "libp2p NAT module can't detect gateway (${no_gateway}× in last 60s)"
+        log_dim "  If your node has a static public IP, set ${BOLD}LOGOS_EXTERNAL_IP${RESET}${DIM} in"
+        log_dim "  ${LOGOS_SETTINGS_FILE} and run ${BOLD}logosup reset${RESET}${DIM} to skip NAT traversal."
+    fi
 }
