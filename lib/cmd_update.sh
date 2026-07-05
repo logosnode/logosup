@@ -236,7 +236,6 @@ cmd_update() {
                 echo ""
                 if confirm "Proceed with breaking-change migration to ${LOGOS_NODE_VERSION}?" "n"; then
                     save_setting "LOGOS_NODE_VERSION" "$LOGOS_NODE_VERSION"
-                    save_setting "LOGOS_CIRCUITS_VERSION" "$LOGOS_CIRCUITS_VERSION"
                     generate_compose_file
                     source "$LOGOS_NODE_LIB/cmd_reset.sh"
                     _perform_migration "update" "true"
@@ -258,7 +257,6 @@ cmd_update() {
                 fi
 
                 save_setting "LOGOS_NODE_VERSION" "$LOGOS_NODE_VERSION"
-                save_setting "LOGOS_CIRCUITS_VERSION" "$LOGOS_CIRCUITS_VERSION"
 
                 generate_compose_file
                 docker_build || die "Failed to build updated Docker image"

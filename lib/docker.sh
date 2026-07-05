@@ -154,7 +154,7 @@ docker_build() {
     compose_path="$(get_compose_path)"
 
     log_step "Building Logos Node Docker image..."
-    log_dim "This may take a few minutes on first run (downloading node binary + circuits)"
+    log_dim "This may take a few minutes on first run (downloading node binary)"
 
     $DOCKER_COMPOSE -f "$compose_path" build 2>&1 | while IFS= read -r line; do
         echo -e "  ${DIM}${line}${RESET}"

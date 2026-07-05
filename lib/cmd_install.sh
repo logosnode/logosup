@@ -25,15 +25,13 @@ cmd_install() {
     # 4. Fetch latest release version
     fetch_latest_versions || die "Failed to fetch release information"
 
-    # Save versions to config
+    # Save version to config
     save_setting "LOGOS_NODE_VERSION" "$LOGOS_NODE_VERSION"
-    save_setting "LOGOS_CIRCUITS_VERSION" "$LOGOS_CIRCUITS_VERSION"
 
     echo ""
     print_separator
     log_info "Ready to install:"
     log_info "  Node version:     ${BOLD}${LOGOS_NODE_VERSION}${RESET}"
-    log_info "  Circuits version: ${BOLD}v${LOGOS_CIRCUITS_VERSION}${RESET}"
     log_info "  Docker image:     ${BOLD}${LOGOS_DOCKER_IMAGE}:${LOGOS_NODE_VERSION}${RESET}"
     log_info "  API port:         ${BOLD}${LOGOS_API_PORT}${RESET}"
     log_info "  UDP port:         ${BOLD}${LOGOS_UDP_PORT}${RESET}"

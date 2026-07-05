@@ -66,7 +66,6 @@ _yml_get() {
 _set_defaults() {
     : "${LOGOS_NETWORK:=testnet}"
     : "${LOGOS_NODE_VERSION:=latest}"
-    : "${LOGOS_CIRCUITS_VERSION:=latest}"
     : "${LOGOS_API_PORT:=8080}"
     : "${LOGOS_UDP_PORT:=3000}"
     : "${LOGOS_FAUCET_URL:=https://testnet.blockchain.logos.co/web/faucet/}"
@@ -87,7 +86,7 @@ _set_defaults() {
     # node advertises this address to peers and disables NAT traversal.
     : "${LOGOS_EXTERNAL_IP:=}"
 
-    export LOGOS_NETWORK LOGOS_NODE_VERSION LOGOS_CIRCUITS_VERSION LOGOS_API_PORT LOGOS_UDP_PORT
+    export LOGOS_NETWORK LOGOS_NODE_VERSION LOGOS_API_PORT LOGOS_UDP_PORT
     export LOGOS_FAUCET_URL LOGOS_DASHBOARD_URL LOGOS_DOCKER_IMAGE LOGOS_CONTAINER_NAME
     export LOGOS_NODE_REPO LOGOS_CLI_REPO LOGOS_BOOTSTRAP_PEERS LOGOS_GRAFANA_PORT
     export LOGOS_GRAFANA_AUTH LOGOS_GRAFANA_PASSWORD LOGOS_EXTERNAL_IP

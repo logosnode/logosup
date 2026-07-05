@@ -51,16 +51,6 @@ get_release_assets() {
         sed -E 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
 }
 
-# Detect the circuits version from a release's asset list
-# Circuits follow: logos-blockchain-circuits-v{circuits-version}-{os}-{arch}.tar.gz
-detect_circuits_version() {
-    local assets="$1"
-    local arch="$2"
-
-    echo "$assets" | grep "circuits" | grep "$arch" | head -1 | \
-        sed -E 's/.*circuits-v([0-9]+\.[0-9]+\.[0-9]+).*/\1/'
-}
-
 # Build the download URL for the node binary
 # Pattern: logos-blockchain-node-linux-{arch}-{version}.tar.gz
 get_node_binary_url() {
@@ -71,47 +61,21 @@ get_node_binary_url() {
     echo "https://github.com/${repo}/releases/download/${version}/logos-blockchain-node-linux-${arch}-${version}.tar.gz"
 }
 
-# Build the download URL for circuits
-# Pattern: logos-blockchain-circuits-v{circuits-version}-linux-{arch}.tar.gz
-get_circuits_url() {
-    local version="$1"
-    local circuits_version="$2"
-    local arch="$3"
-    local repo="${LOGOS_NODE_REPO:-logos-blockchain/logos-blockchain}"
-
-    echo "https://github.com/${repo}/releases/download/${version}/logos-blockchain-circuits-v${circuits_version}-linux-${arch}.tar.gz"
-}
-
-# Fetch latest versions and update config
-# Sets LOGOS_NODE_VERSION and LOGOS_CIRCUITS_VERSION
+# Fetch latest node release and set LOGOS_NODE_VERSION.
+# Circuits used to be a separate tarball asset; since 0.1.3-rc.13 they're
+# bundled into the node binary, so there is no per-arch circuits asset to
+# probe or track anymore.
 fetch_latest_versions() {
     log_step "Checking for latest Logos Blockchain release..."
 
     local tag
     tag="$(get_latest_release "$LOGOS_NODE_REPO")" || return 1
-    log_info "Latest release: ${BOLD}${tag}${RESET}"
-
-    # Get asset list to detect circuits version
-    local assets
-    assets="$(get_release_assets "$LOGOS_NODE_REPO" "$tag")"
-
-    local circuits_ver
-    circuits_ver="$(detect_circuits_version "$assets" "$LOGOS_ARCH")"
-
-    if [[ -z "$circuits_ver" ]]; then
-        log_warn "Could not auto-detect circuits version from release assets"
-        log_info "Using circuits version from config: $LOGOS_CIRCUITS_VERSION"
-        circuits_ver="$LOGOS_CIRCUITS_VERSION"
-    fi
 
     # Strip leading 'v' if present for consistency
-    local node_ver="${tag#v}"
+    LOGOS_NODE_VERSION="${tag#v}"
 
-    LOGOS_NODE_VERSION="$node_ver"
-    LOGOS_CIRCUITS_VERSION="$circuits_ver"
-
-    log_info "Node version:     ${BOLD}${LOGOS_NODE_VERSION}${RESET}"
-    log_info "Circuits version: ${BOLD}${LOGOS_CIRCUITS_VERSION}${RESET}"
+    log_info "Latest release: ${BOLD}${tag}${RESET}"
+    log_info "Node version:   ${BOLD}${LOGOS_NODE_VERSION}${RESET}"
 }
 
 # Check for CLI tool updates
