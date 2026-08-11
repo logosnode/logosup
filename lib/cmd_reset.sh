@@ -49,18 +49,30 @@ _perform_migration() {
         log_warn "${BOLD}This will wipe local node data${RESET}"
     fi
 
-    # Detect whether the current on-disk config predates 0.2.0 — if so, we
-    # can preserve wallet identities across the genesis reset by running
-    # `migrate-from-0.1.2` before wiping data. The stable discriminator is
-    # `tip_poll:` under cryptarchia.network.sync (0.2.0-only marker); its
-    # absence means the config is 0.1.x shape. Both 0.1.2 and 0.2.0 have
-    # top-level `wallet:` and `known_keys:` under it, so those don't work
-    # as version markers. Funds still don't carry over — only identities.
-    local preserve_keys=false
+    # Pick the config-regeneration strategy. Three cases:
+    #
+    #  "migrate-012" — on-disk config predates 0.2.0 (no `tip_poll:` marker
+    #      under cryptarchia.network.sync, the stable 0.2.x-only discriminator;
+    #      top-level `wallet:` / `known_keys:` exist in both shapes so they
+    #      don't work as markers). Run `migrate-from-0.1.2` to convert the
+    #      config shape while preserving wallet identities.
+    #  "update-config" — config is already 0.2.x shape and keystore.yaml
+    #      exists (any 0.2.0+ install). Run `update-config` to regenerate the
+    #      config from the existing keystore, keeping key identities stable.
+    #      Also required mechanically: since 0.2.1 `init-config` refuses to
+    #      run when keystore.yaml exists.
+    #  "init-config" — no usable config/keystore. Generate everything fresh.
+    #
+    # Funds never carry over a genesis reset — only key identities do.
+    local strategy="init-config"
     local config_path
     config_path="$(get_user_config_path)"
+    local keystore_path
+    keystore_path="$(get_keystore_path)"
     if [[ -f "$config_path" ]] && ! grep -qE '^[[:space:]]+tip_poll:[[:space:]]*$' "$config_path"; then
-        preserve_keys=true
+        strategy="migrate-012"
+    elif [[ -f "$keystore_path" ]]; then
+        strategy="update-config"
     fi
 
     log_info "Steps that will run:"
@@ -68,11 +80,11 @@ _perform_migration() {
     log_info "  2. Back up ${BOLD}user_config.yaml${RESET} → ${BOLD}user_config.yaml.pre-migration-<timestamp>${RESET}"
     log_info "  3. Delete ${BOLD}${LOGOS_NODE_DIR}/data/${RESET} (chain DB + logs)"
     log_info "  4. Rebuild Docker image for the current node version"
-    if [[ "$preserve_keys" == "true" ]]; then
-        log_info "  5. Migrate 0.1.2 → 0.2.0 config ${BOLD}(preserves wallet keys)${RESET}"
-    else
-        log_info "  5. Regenerate fresh ${BOLD}user_config.yaml${RESET} (new wallet keys)"
-    fi
+    case "$strategy" in
+        migrate-012)   log_info "  5. Migrate 0.1.2 → 0.2.x config ${BOLD}(preserves wallet keys)${RESET}" ;;
+        update-config) log_info "  5. Regenerate ${BOLD}user_config.yaml${RESET} from keystore ${BOLD}(preserves wallet keys)${RESET}" ;;
+        *)             log_info "  5. Regenerate fresh ${BOLD}user_config.yaml${RESET} (new wallet keys)" ;;
+    esac
     log_info "  6. Restart node (and monitoring, if it was running)"
     echo ""
     log_dim "After migration you must request faucet funds again — the new chain starts from zero."
@@ -101,18 +113,29 @@ _perform_migration() {
     # cmd_start auto-restarts monitoring at the end if the compose file exists.
 
     # ── Step 2: back up user_config.yaml ──────────────────────────────
-    # (config_path already resolved above during preserve_keys detection)
+    # (config_path already resolved above during strategy detection)
     if [[ -f "$config_path" ]]; then
         local backup_path="${config_path}.pre-migration-$(date +%Y%m%d-%H%M%S)"
         cp "$config_path" "$backup_path"
         chmod 600 "$backup_path"
         log_success "Backed up config to ${BOLD}${backup_path}${RESET}"
         # In the fresh-keys path we drop the old config so init-config generates
-        # cleanly. In the preserve-keys path we keep it in place because
-        # migrate-from-0.1.2 needs to read it.
-        if [[ "$preserve_keys" != "true" ]]; then
+        # cleanly. migrate-from-0.1.2 needs the old config in place to read it;
+        # update-config overwrites it in place (-y), so both preserve paths
+        # leave it where it is.
+        if [[ "$strategy" == "init-config" ]]; then
             rm -f "$config_path"
         fi
+    fi
+
+    # In the fresh-keys path a leftover keystore.yaml would make init-config
+    # hard-fail ("Keystore file exists" since 0.2.1) — back it up and clear it.
+    if [[ "$strategy" == "init-config" ]] && [[ -f "$keystore_path" ]]; then
+        local ks_backup="${keystore_path}.pre-migration-$(date +%Y%m%d-%H%M%S)"
+        cp "$keystore_path" "$ks_backup"
+        chmod 600 "$ks_backup"
+        rm -f "$keystore_path"
+        log_success "Backed up keystore to ${BOLD}${ks_backup}${RESET}"
     fi
 
     # ── Step 3: wipe data dir ─────────────────────────────────────────
@@ -141,11 +164,11 @@ _perform_migration() {
     fi
 
     # ── Step 5: regenerate config ─────────────────────────────────────
-    if [[ "$preserve_keys" == "true" ]]; then
-        docker_migrate_from_012 || die "Failed to migrate 0.1.2 config to 0.2.0"
-    else
-        docker_init_config || die "Failed to regenerate node configuration"
-    fi
+    case "$strategy" in
+        migrate-012)   docker_migrate_from_012 || die "Failed to migrate 0.1.2 config to 0.2.x" ;;
+        update-config) docker_update_config    || die "Failed to regenerate config from keystore" ;;
+        *)             docker_init_config      || die "Failed to regenerate node configuration" ;;
+    esac
 
     # ── Show new keys + faucet ────────────────────────────────────────
     echo ""

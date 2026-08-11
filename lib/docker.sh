@@ -179,16 +179,15 @@ docker_init_config() {
 
     # Build init-config args. --http-host takes a full SocketAddr (host:port),
     # not just a host; port 8080 matches the container-internal API port that
-    # the compose file forwards. --ibd populates
-    # cryptarchia.network.bootstrap.ibd.peers from the -p peer IDs so the
-    # node actually downloads historical blocks from bootstrap peers instead
-    # of waiting on gossip forever (gossip only carries new blocks; without
-    # IBD a fresh node hovers at height 0 with peers connected).
+    # the compose file forwards. Since 0.2.1 IBD is on by default: the -p peer
+    # IDs auto-populate cryptarchia.network.bootstrap.ibd.peers so the node
+    # downloads historical blocks from bootstrap peers instead of waiting on
+    # gossip forever (the old --ibd opt-in flag was replaced by --skip-ibd,
+    # which we never pass).
     local init_args=(
         --output /app/user_config.yaml
         --keystore /app/keystore.yaml
         --http-host 0.0.0.0:8080
-        --ibd
     )
 
     # Bootstrap peers as -p /ip4/.../p2p/... (comma-separated in LOGOS_BOOTSTRAP_PEERS)
@@ -303,15 +302,15 @@ docker_migrate_from_012() {
     # here (the release notes' quick-start relies on this too). Without
     # this, migrated nodes come up with zero fleet contacts and only find
     # peers through leftover DHT cache, which almost never surfaces the
-    # 0.2.0 fleet. Reuse the same LOGOS_BOOTSTRAP_PEERS the fresh-install
-    # path uses.
+    # current fleet. Reuse the same LOGOS_BOOTSTRAP_PEERS the fresh-install
+    # path uses. IBD from those peers is on by default since 0.2.1 (the old
+    # --ibd opt-in flag was replaced by --skip-ibd, which we never pass).
     local migrate_args=(
         migrate-from-0.1.2
         --old-config /app/user_config.yaml
         --new-config /app/user_config.migrated.yaml
         --keystore /app/keystore.yaml
         --http-host 0.0.0.0:8080
-        --ibd
     )
     local _p
     IFS=',' read -ra _peers <<< "$LOGOS_BOOTSTRAP_PEERS"
@@ -352,6 +351,83 @@ docker_migrate_from_012() {
     patch_user_config_for_log_files "$config_path"
 
     log_success "Migrated to 0.2.0 config shape; wallet keys preserved in $keystore_path"
+    return 0
+}
+
+# Regenerate user_config.yaml from an EXISTING keystore.yaml via the node's
+# `update-config` subcommand. This is the migration path for 0.2.x → 0.2.1+
+# breaking releases: the config shape is already modern, but the chain was
+# reset, so we want a freshly generated config (new defaults, new fields)
+# while keeping the operator's key identities stable. Funds never survive a
+# genesis reset, but stable public keys mean dashboards, faucet history and
+# any allowlists keep pointing at the same operator.
+#
+# Also load-bearing for a subtler reason: since 0.2.1, `init-config` hard-fails
+# when keystore.yaml already exists ("Keystore file exists. Use `update`
+# command."), so the old wipe-and-init flow cannot work for operators coming
+# from 0.2.0 — this is the path the node itself directs us to.
+docker_update_config() {
+    local config_path
+    config_path="$(get_user_config_path)"
+    local keystore_path
+    keystore_path="$(get_keystore_path)"
+
+    [[ -f "$keystore_path" ]] || {
+        log_error "No keystore.yaml found — cannot run update-config"
+        return 1
+    }
+
+    local update_args=(
+        update-config
+        -y
+        --user-config /app/user_config.yaml
+        --keystore /app/keystore.yaml
+        --http-host 0.0.0.0:8080
+    )
+
+    local _p
+    IFS=',' read -ra _peers <<< "$LOGOS_BOOTSTRAP_PEERS"
+    for _p in "${_peers[@]}"; do
+        update_args+=("-p" "$_p")
+    done
+    if [[ -n "${LOGOS_EXTERNAL_IP:-}" ]]; then
+        update_args+=("--external-address" "/ip4/${LOGOS_EXTERNAL_IP}/udp/${LOGOS_UDP_PORT}/quic-v1")
+        log_dim "Advertising external address: /ip4/${LOGOS_EXTERNAL_IP}/udp/${LOGOS_UDP_PORT}/quic-v1"
+    fi
+
+    log_step "Regenerating node configuration from existing keystore..."
+    log_dim "Running logos-blockchain-node update-config (wallet keys preserved)"
+
+    local host_uid
+    host_uid="$(id -u)"
+    local host_gid
+    host_gid="$(id -g)"
+
+    mkdir -p "${LOGOS_NODE_DIR}/data"
+
+    $DOCKER_CMD run --rm \
+        --user "${host_uid}:${host_gid}" \
+        -v "${LOGOS_NODE_DIR}:/app" \
+        -w /app \
+        "${LOGOS_DOCKER_IMAGE}:${LOGOS_NODE_VERSION}" \
+        "${update_args[@]}" 2>&1 | while IFS= read -r line; do
+            echo -e "  ${DIM}${line}${RESET}"
+        done
+
+    if [[ ! -f "$config_path" ]]; then
+        log_error "update-config did not produce a new config"
+        return 1
+    fi
+
+    chmod 600 "$config_path"
+    chmod 600 "$keystore_path"
+
+    # Same compose-friendly patches as the init-config path (all idempotent).
+    patch_user_config_for_http_bind "$config_path"
+    patch_user_config_for_otlp "$config_path"
+    patch_user_config_for_log_files "$config_path"
+
+    log_success "Regenerated $config_path; wallet keys preserved in $keystore_path"
     return 0
 }
 

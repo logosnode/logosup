@@ -125,9 +125,12 @@ def poll_node_api():
 
         node_up.set(1)
 
-        # 0.2.0: mode is an enum object like {"Started": "Bootstrapping"}
-        # 0.1.x: mode was a scalar string like "Bootstrapping"
-        mode_field = data.get("mode", "Unknown")
+        # 0.2.1: scalar "state" inside "cryptarchia_info" (e.g. "Bootstrapping")
+        # 0.2.0: "mode" is an enum object like {"Started": "Bootstrapping"}
+        # 0.1.x: "mode" was a scalar string like "Bootstrapping"
+        mode_field = data.get("cryptarchia_info", {}).get("state") or data.get(
+            "mode", "Unknown"
+        )
         if isinstance(mode_field, dict) and mode_field:
             mode = next(iter(mode_field.values()), "Unknown")
         else:
