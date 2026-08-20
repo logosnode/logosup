@@ -42,21 +42,25 @@ cmd_status() {
     consensus="$(curl -sf "${api_url}/cryptarchia/info" 2>/dev/null)" || true
 
     if [[ -n "$consensus" ]]; then
-        local mode slot height lib tip
-        # 0.2.0 wraps the mode in an enum object: "mode":{"Started":"Bootstrapping"}.
-        # 0.1.x returned a scalar: "mode":"Bootstrapping". Try the wrapped shape
-        # first (extracts the inner variant), fall back to the scalar. On no
-        # match the substitution leaves the whole body — detect and blank out.
-        mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*\{"[^"]+":[[:space:]]*"([^"]+)"\}.*/\1/p')"
+        local mode phase slot height lib tip
+        # 0.2.1 renamed the field: "state":"Bootstrapping" (scalar) plus a
+        # top-level "phase" (e.g. "InitialBlockDownload"). 0.2.0 wrapped it in
+        # an enum object: "mode":{"Started":"Bootstrapping"}. 0.1.x was a
+        # scalar "mode":"Bootstrapping". Try newest shape first.
+        mode="$(echo "$consensus" | sed -nE 's/.*"state":[[:space:]]*"([^"]+)".*/\1/p')"
+        if [[ -z "$mode" ]]; then
+            mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*\{"[^"]+":[[:space:]]*"([^"]+)"\}.*/\1/p')"
+        fi
         if [[ -z "$mode" ]]; then
             mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*"([^"]+)".*/\1/p')"
         fi
+        phase="$(echo "$consensus" | sed -nE 's/.*"phase":[[:space:]]*"([^"]+)".*/\1/p')"
         slot="$(echo "$consensus" | sed -E 's/.*"slot":([0-9]+).*/\1/')"
         height="$(echo "$consensus" | sed -E 's/.*"height":([0-9]+).*/\1/')"
 
         case "$mode" in
             Online)        log_success "Mode: ${GREEN}${mode}${RESET}" ;;
-            Bootstrapping) log_info "Mode: ${YELLOW}${mode}${RESET} (syncing...)" ;;
+            Bootstrapping) log_info "Mode: ${YELLOW}${mode}${RESET} (syncing...${phase:+ phase: ${phase}})" ;;
             "")            log_info "Mode: ${DIM}(unknown)${RESET}" ;;
             *)             log_info "Mode: ${mode}" ;;
         esac
@@ -197,12 +201,15 @@ _scan_recent_node_logs() {
     window="$($DOCKER_CMD logs --since 60s "$LOGOS_CONTAINER_NAME" 2>&1)" || return 0
     [[ -z "$window" ]] && return 0
 
+    # grep -c prints the count (including "0") on its own — it just also
+    # exits 1 when the count is 0, so the fallback must NOT echo a second
+    # "0" (that yields "0\n0" and breaks the (( )) checks below).
     local proto_mismatch ibd_failed ntp_failed net_unreach no_gateway
-    proto_mismatch="$(echo "$window" | grep -cE 'does not support /logos-blockchain-[a-z]+-[0-9]+\.[0-9]+\.[0-9]+/chainsync' 2>/dev/null || echo 0)"
-    ibd_failed="$(echo "$window"     | grep -cE 'Initial Block Download failed: AllPeersFailed'                          2>/dev/null || echo 0)"
-    ntp_failed="$(echo "$window"     | grep -cE 'NTP sync failed'                                                        2>/dev/null || echo 0)"
-    net_unreach="$(echo "$window"    | grep -cE 'Network is unreachable|Temporary failure in name resolution'            2>/dev/null || echo 0)"
-    no_gateway="$(echo "$window"     | grep -cE 'Failed to detect gateway|Failed to get default gateway'                 2>/dev/null || echo 0)"
+    proto_mismatch="$(echo "$window" | grep -cE 'does not support /logos-blockchain-[a-z]+-[0-9]+\.[0-9]+\.[0-9]+/chainsync' 2>/dev/null || true)"
+    ibd_failed="$(echo "$window"     | grep -cE 'Initial Block Download failed: AllPeersFailed'                          2>/dev/null || true)"
+    ntp_failed="$(echo "$window"     | grep -cE 'NTP sync failed'                                                        2>/dev/null || true)"
+    net_unreach="$(echo "$window"    | grep -cE 'Network is unreachable|Temporary failure in name resolution'            2>/dev/null || true)"
+    no_gateway="$(echo "$window"     | grep -cE 'Failed to detect gateway|Failed to get default gateway'                 2>/dev/null || true)"
 
     # Nothing to say → don't print the section header at all.
     if (( proto_mismatch == 0 && ibd_failed == 0 && ntp_failed == 0 && net_unreach == 0 && no_gateway == 0 )); then

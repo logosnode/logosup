@@ -112,10 +112,14 @@ _show_brief_status() {
 
     if [[ -n "$consensus" ]]; then
         local mode slot height
-        # 0.2.0 wraps mode in an enum object: "mode":{"Started":"Bootstrapping"}.
-        # 0.1.x returned a scalar: "mode":"Bootstrapping". Try wrapped first,
-        # fall back to scalar, else leave empty.
-        mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*\{"[^"]+":[[:space:]]*"([^"]+)"\}.*/\1/p')"
+        # 0.2.1 renamed the field: "state":"Bootstrapping" (scalar). 0.2.0
+        # wrapped it in an enum object: "mode":{"Started":"Bootstrapping"}.
+        # 0.1.x was a scalar "mode":"Bootstrapping". Try newest shape first,
+        # fall back through the older ones, else leave empty.
+        mode="$(echo "$consensus" | sed -nE 's/.*"state":[[:space:]]*"([^"]+)".*/\1/p')"
+        if [[ -z "$mode" ]]; then
+            mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*\{"[^"]+":[[:space:]]*"([^"]+)"\}.*/\1/p')"
+        fi
         if [[ -z "$mode" ]]; then
             mode="$(echo "$consensus" | sed -nE 's/.*"mode":[[:space:]]*"([^"]+)".*/\1/p')"
         fi
